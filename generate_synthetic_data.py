@@ -522,6 +522,9 @@ class FastSyntheticGenerator:
         # Pre-allocated PK tuples for composite PK with single-column FKs
         pre_allocated_pk_tuples = None
         pre_allocated_pk = None
+        # Track which single-column FK-PK columns have pre-allocated values
+        # (for partial tuple assignment when some PK columns are in composite FKs)
+        pre_allocated_pk_cols = None
         
         if pk_fk_columns:
             debug_print("{0}: PK columns {1} are also FK columns - pre-allocating values".format(node, pk_fk_columns))
@@ -541,20 +544,26 @@ class FastSyntheticGenerator:
                 self.rng.shuffle(unique_parent_vals)
                 pre_allocated_pk = unique_parent_vals[:len(rows)]
             elif len(tmeta.pk_columns) > 1:
-                # Multi-column PK - check if all PK columns are single-column FKs (not composite FKs)
+                # Multi-column PK - check which PK columns are single-column FKs (not composite FKs)
                 pk_cols_that_are_single_fks = set()
                 for pk_col in tmeta.pk_columns:
                     if pk_col in pk_fk_columns and pk_col not in composite_columns_all:
                         pk_cols_that_are_single_fks.add(pk_col)
                 
-                if pk_cols_that_are_single_fks == set(tmeta.pk_columns):
-                    # All PK columns are single-column FKs - generate Cartesian product
-                    debug_print("{0}: All PK columns are single-column FKs - generating Cartesian product".format(node))
+                # Generate Cartesian product if at least 2 PK columns are single-column FKs
+                # This enables optimization even when some PK columns are in composite FKs
+                if len(pk_cols_that_are_single_fks) >= 2:
+                    # At least 2 PK columns are single-column FKs - generate Cartesian product for those
+                    debug_print("{0}: {1} of {2} PK columns are single-column FKs - generating Cartesian product".format(
+                        node, len(pk_cols_that_are_single_fks), len(tmeta.pk_columns)))
                     
-                    # Build pools of unique FK values for each PK column
+                    # Build ordered list of single-column FK-PK columns (preserving PK column order)
+                    ordered_single_fk_pk_cols = [col for col in tmeta.pk_columns if col in pk_cols_that_are_single_fks]
+                    
+                    # Build pools of unique FK values for each single-column FK-PK column
                     pk_value_pools = []
                     pool_sizes = []
-                    for pk_col in tmeta.pk_columns:
+                    for pk_col in ordered_single_fk_pk_cols:
                         parent_vals = parent_caches.get(pk_col, [])
                         unique_vals = list(set(parent_vals))
                         if not unique_vals:
@@ -572,14 +581,14 @@ class FastSyntheticGenerator:
                         
                         debug_print("{0}: FK value pools: {1}, max combinations: {2}".format(
                             node, 
-                            dict(zip(tmeta.pk_columns, pool_sizes)),
+                            dict(zip(ordered_single_fk_pk_cols, pool_sizes)),
                             max_combinations))
                         
                         needed_rows = len(rows)
                         if max_combinations < needed_rows:
                             print("WARNING: {0} needs {1} rows but only {2} unique PK combinations available from FK values".format(
                                 node, needed_rows, max_combinations), file=sys.stderr)
-                            print("  FK column pool sizes: {0}".format(dict(zip(tmeta.pk_columns, pool_sizes))), file=sys.stderr)
+                            print("  FK column pool sizes: {0}".format(dict(zip(ordered_single_fk_pk_cols, pool_sizes))), file=sys.stderr)
                             print("  Truncating to {0} rows".format(max_combinations), file=sys.stderr)
                             rows = rows[:max_combinations]
                             needed_rows = max_combinations
@@ -622,7 +631,10 @@ class FastSyntheticGenerator:
                             # Take only as many as we need
                             pre_allocated_pk_tuples = all_combinations[:needed_rows]
                         
-                        debug_print("{0}: Pre-allocated {1} unique PK tuples".format(node, len(pre_allocated_pk_tuples)))
+                        # Store the column order for partial tuple assignment
+                        pre_allocated_pk_cols = ordered_single_fk_pk_cols
+                        debug_print("{0}: Pre-allocated {1} unique PK tuples for columns {2}".format(
+                            node, len(pre_allocated_pk_tuples), pre_allocated_pk_cols))
         
         filtered_parent_caches = {}
         for comp in composite_cfgs:
@@ -680,11 +692,13 @@ class FastSyntheticGenerator:
             temp_row = dict(row)
             row_skipped = False
             
-            # If we have pre-allocated PK tuples (composite PK with all single-column FKs),
-            # assign them first to guarantee uniqueness
+            # If we have pre-allocated PK tuples (at least 2 single-column FK-PK columns),
+            # assign them first to guarantee partial PK uniqueness.
+            # Remaining PK columns (in composite FKs) will be assigned by composite FK resolution.
             if pre_allocated_pk_tuples and row_idx < len(pre_allocated_pk_tuples):
                 pk_tuple = pre_allocated_pk_tuples[row_idx]
-                for col_idx, pk_col in enumerate(tmeta.pk_columns):
+                # Use pre_allocated_pk_cols which contains only the single-column FK-PK columns
+                for col_idx, pk_col in enumerate(pre_allocated_pk_cols):
                     temp_row[pk_col] = pk_tuple[col_idx]
             
             for comp in composite_cfgs:
