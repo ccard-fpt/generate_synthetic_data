@@ -671,6 +671,23 @@ class FastSyntheticGenerator:
             fk_child_cols = set(comp["child_columns"])
             pk_cols = set(tmeta.pk_columns)
             overlap = fk_child_cols & pk_cols
+            
+            # Check if Cartesian product pre-assignment already ensures PK uniqueness
+            # If pre_allocated_pk_tuples exists, some PK columns have been pre-assigned
+            # and their uniqueness is already guaranteed by the Cartesian product
+            if overlap and len(tmeta.pk_columns) > 1 and pre_allocated_pk_tuples and pre_allocated_pk_cols:
+                pre_assigned_pk_set = set(pre_allocated_pk_cols)
+                # Skip overlap checking if:
+                # 1. The overlapping columns are NOT in the pre-assigned set (overlap is with non-pre-assigned cols)
+                #    AND we have at least 2 pre-assigned PK columns (guarantees uniqueness)
+                # 2. OR: The overlapping columns ARE in the pre-assigned set (already handled by Cartesian)
+                overlap_with_pre_assigned = overlap & pre_assigned_pk_set
+                if overlap_with_pre_assigned or len(pre_assigned_pk_set) >= 2:
+                    # Pre-assigned columns already ensure uniqueness; skip restrictive overlap checking
+                    debug_print("{0}: Skipping composite PK-FK overlap check for {1} - pre-assigned columns {2} ensure uniqueness".format(
+                        node, comp['constraint_name'], pre_allocated_pk_cols))
+                    continue
+            
             if overlap and len(tmeta.pk_columns) > 1:
                 # This composite FK overlaps with a multi-column PK
                 composite_pk_fk_overlap[comp['constraint_name']] = {
