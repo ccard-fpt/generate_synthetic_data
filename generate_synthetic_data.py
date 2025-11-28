@@ -579,7 +579,7 @@ class FastSyntheticGenerator:
                         if not unique_vals:
                             print("WARNING: {0}: No parent values available for PK-FK column {1}".format(node, pk_col), file=sys.stderr)
                             print("  Parent cache keys: {0}".format(list(parent_caches.keys())), file=sys.stderr)
-                            print("  This PK-FK column will prevent Cartesian product generation".format(), file=sys.stderr)
+                            print("  This PK-FK column will prevent Cartesian product generation", file=sys.stderr)
                             pk_value_pools = []
                             break
                         pk_value_pools.append(unique_vals)
