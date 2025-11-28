@@ -666,7 +666,7 @@ class FastSyntheticGenerator:
                         skipped_rows += 1
                         break
                 else:
-                    parent_row = self.rng. choice(valid_parent_rows)
+                    parent_row = self.rng.choice(valid_parent_rows)
                     for child_col, parent_col in zip(fk_child_cols, parent_cols):
                         temp_row[child_col] = parent_row.get(parent_col)
             
@@ -690,11 +690,6 @@ class FastSyntheticGenerator:
                     else:
                         parent_vals = parent_caches.get(fk_col, [])
                         temp_row[fk_col] = self.rng.choice(parent_vals) if parent_vals else None
-            
-            # For composite PKs without FK overlap, track the used combinations
-            if len(tmeta.pk_columns) > 1 and not composite_pk_fk_overlap:
-                pk_tuple = tuple(temp_row.get(col) for col in tmeta.pk_columns)
-                used_composite_pk_combos.add(pk_tuple)
             
             resolved_rows.append(temp_row)
         
