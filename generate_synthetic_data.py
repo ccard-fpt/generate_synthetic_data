@@ -519,6 +519,16 @@ class FastSyntheticGenerator:
             if parent_table in self.generated_rows and parent_table not in parent_row_caches:
                 parent_row_caches[parent_table] = self.generated_rows[parent_table]
         
+        # Identify composite FKs that contain PK columns for hybrid Cartesian product
+        composite_fk_with_pk = []
+        composite_fk_pk_cols = set()
+        for comp in composite_cfgs:
+            fk_child_cols = set(comp["child_columns"])
+            pk_overlap = fk_child_cols & set(tmeta.pk_columns)
+            if pk_overlap:
+                composite_fk_with_pk.append(comp)
+                composite_fk_pk_cols.update(pk_overlap)
+        
         # Pre-allocated PK tuples for composite PK with single-column FKs
         pre_allocated_pk_tuples = None
         pre_allocated_pk = None
@@ -555,13 +565,15 @@ class FastSyntheticGenerator:
                 debug_print("{0}: PK-FK columns: {1}".format(node, pk_fk_columns))
                 debug_print("{0}: Composite FK columns: {1}".format(node, composite_columns_all))
                 debug_print("{0}: Single-column FK-PK columns: {1}".format(node, pk_cols_that_are_single_fks))
+                debug_print("{0}: Composite FKs with PK overlap: {1}".format(node, [c['constraint_name'] for c in composite_fk_with_pk]))
                 
-                # Generate Cartesian product if at least 2 PK columns are single-column FKs
-                # This enables optimization even when some PK columns are in composite FKs
-                if len(pk_cols_that_are_single_fks) >= 2:
-                    # At least 2 PK columns are single-column FKs - generate Cartesian product for those
-                    debug_print("{0}: {1} of {2} PK columns are single-column FKs - attempting Cartesian product".format(
-                        node, len(pk_cols_that_are_single_fks), len(tmeta.pk_columns)))
+                # Generate hybrid Cartesian product if:
+                # - At least 1 PK column is a single-column FK, OR
+                # - Composite FKs contain PK columns that can be combined
+                # This enables optimization when some PK columns are in composite FKs
+                if len(pk_cols_that_are_single_fks) >= 1 or composite_fk_with_pk:
+                    debug_print("{0}: {1} PK column(s) are single-column FKs - attempting hybrid Cartesian product".format(
+                        node, len(pk_cols_that_are_single_fks)))
                     
                     # Build ordered list of single-column FK-PK columns (preserving PK column order)
                     ordered_single_fk_pk_cols = [col for col in tmeta.pk_columns if col in pk_cols_that_are_single_fks]
@@ -585,77 +597,206 @@ class FastSyntheticGenerator:
                         pk_value_pools.append(unique_vals)
                         pool_sizes.append(len(unique_vals))
                     
-                    if pk_value_pools:
+                    # Extract unique combinations from composite FKs that contain PK columns
+                    composite_fk_pk_combos = []
+                    composite_fk_pk_combo_cols = []  # Ordered list of PK columns from composite FKs
+                    
+                    if composite_fk_with_pk:
+                        # For each composite FK with PK overlap, extract unique parent combinations
+                        for comp in composite_fk_with_pk:
+                            parent_table = "{0}.{1}".format(comp['referenced_table_schema'], comp['referenced_table_name'])
+                            parent_rows = parent_row_caches.get(parent_table, [])
+                            
+                            # Get PK columns that are in this composite FK (preserving PK column order)
+                            pk_cols_in_this_fk = [col for col in tmeta.pk_columns if col in comp["child_columns"]]
+                            # Map child columns to parent columns
+                            child_to_parent_map = dict(zip(comp["child_columns"], comp["referenced_columns"]))
+                            parent_cols_for_pk = [child_to_parent_map[col] for col in pk_cols_in_this_fk]
+                            
+                            debug_print("{0}: Composite FK {1} maps PK columns {2} to parent columns {3}".format(
+                                node, comp['constraint_name'], pk_cols_in_this_fk, parent_cols_for_pk))
+                            
+                            # Extract unique combinations from parent rows
+                            unique_combos = set()
+                            for parent_row in parent_rows:
+                                if parent_row:
+                                    combo = tuple(parent_row.get(pcol) for pcol in parent_cols_for_pk)
+                                    if not any(v is None for v in combo):
+                                        unique_combos.add(combo)
+                            
+                            if unique_combos:
+                                composite_fk_pk_combos = list(unique_combos)
+                                composite_fk_pk_combo_cols = pk_cols_in_this_fk
+                                debug_print("{0}: Found {1} unique composite FK combinations for PK columns {2}".format(
+                                    node, len(composite_fk_pk_combos), composite_fk_pk_combo_cols))
+                                break  # Use first composite FK with PK overlap
+                    
+                    # Generate hybrid Cartesian product if we have data
+                    can_generate = (pk_value_pools or composite_fk_pk_combos)
+                    
+                    if can_generate:
                         # Calculate maximum possible combinations
                         max_combinations = 1
+                        
+                        if composite_fk_pk_combos:
+                            max_combinations *= len(composite_fk_pk_combos)
+                            debug_print("{0}: Composite FK contributes {1} combinations".format(
+                                node, len(composite_fk_pk_combos)))
+                        
                         for size in pool_sizes:
                             max_combinations *= size
                         
-                        debug_print("{0}: FK value pools: {1}, max combinations: {2}".format(
-                            node, 
-                            dict(zip(ordered_single_fk_pk_cols, pool_sizes)),
-                            max_combinations))
+                        debug_print("{0}: Total max combinations: {1}".format(node, max_combinations))
                         
                         needed_rows = len(rows)
                         if max_combinations < needed_rows:
-                            print("WARNING: {0} needs {1} rows but only {2} unique PK combinations available from FK values".format(
+                            print("WARNING: {0} needs {1} rows but only {2} unique PK combinations available".format(
                                 node, needed_rows, max_combinations), file=sys.stderr)
-                            print("  FK column pool sizes: {0}".format(dict(zip(ordered_single_fk_pk_cols, pool_sizes))), file=sys.stderr)
                             print("  Truncating to {0} rows".format(max_combinations), file=sys.stderr)
                             rows = rows[:max_combinations]
                             needed_rows = max_combinations
                         
-                        # Optimize: if we need fewer rows than total combinations, 
-                        # generate randomly instead of full Cartesian product
-                        if needed_rows < max_combinations and max_combinations > 100000:
-                            # For large pools, sample randomly to avoid memory issues
-                            debug_print("{0}: Using random sampling ({1} of {2} combinations)".format(
-                                node, needed_rows, max_combinations))
+                        # Generate hybrid Cartesian product
+                        all_pk_cols_in_order = []
+                        
+                        # Build combined list of all PK columns being pre-allocated (in PK column order)
+                        for pk_col in tmeta.pk_columns:
+                            if pk_col in composite_fk_pk_combo_cols or pk_col in ordered_single_fk_pk_cols:
+                                all_pk_cols_in_order.append(pk_col)
+                        
+                        # Generate all combinations
+                        if composite_fk_pk_combos and pk_value_pools:
+                            # Hybrid: composite FK combos × single-column FK values
+                            debug_print("{0}: Generating hybrid Cartesian product".format(node))
                             
-                            used_combos = set()
-                            pre_allocated_pk_tuples = []
+                            if needed_rows < max_combinations and max_combinations > 100000:
+                                # Random sampling for large pools
+                                debug_print("{0}: Using random sampling ({1} of {2} combinations)".format(
+                                    node, needed_rows, max_combinations))
+                                
+                                used_combos = set()
+                                pre_allocated_pk_tuples = []
+                                
+                                # Shuffle for randomness
+                                self.rng.shuffle(composite_fk_pk_combos)
+                                for pool in pk_value_pools:
+                                    self.rng.shuffle(pool)
+                                
+                                max_attempts = needed_rows * 10
+                                attempts = 0
+                                while len(pre_allocated_pk_tuples) < needed_rows and attempts < max_attempts:
+                                    # Pick random composite combo
+                                    comp_combo = self.rng.choice(composite_fk_pk_combos)
+                                    # Pick random single-column values
+                                    single_combo = tuple(self.rng.choice(pool) for pool in pk_value_pools)
+                                    
+                                    # Merge in PK column order
+                                    full_combo = []
+                                    comp_idx, single_idx = 0, 0
+                                    for pk_col in all_pk_cols_in_order:
+                                        if pk_col in composite_fk_pk_combo_cols:
+                                            col_pos = composite_fk_pk_combo_cols.index(pk_col)
+                                            full_combo.append(comp_combo[col_pos])
+                                        elif pk_col in ordered_single_fk_pk_cols:
+                                            col_pos = ordered_single_fk_pk_cols.index(pk_col)
+                                            full_combo.append(single_combo[col_pos])
+                                    
+                                    full_combo = tuple(full_combo)
+                                    if full_combo not in used_combos:
+                                        used_combos.add(full_combo)
+                                        pre_allocated_pk_tuples.append(full_combo)
+                                    attempts += 1
+                                
+                                if len(pre_allocated_pk_tuples) < needed_rows:
+                                    # Fallback to full generation
+                                    debug_print("{0}: Random sampling got {1}, falling back to full generation".format(
+                                        node, len(pre_allocated_pk_tuples)))
+                                    all_combinations = []
+                                    for comp_combo in composite_fk_pk_combos:
+                                        for single_combo in itertools.product(*pk_value_pools):
+                                            full_combo = []
+                                            for pk_col in all_pk_cols_in_order:
+                                                if pk_col in composite_fk_pk_combo_cols:
+                                                    col_pos = composite_fk_pk_combo_cols.index(pk_col)
+                                                    full_combo.append(comp_combo[col_pos])
+                                                elif pk_col in ordered_single_fk_pk_cols:
+                                                    col_pos = ordered_single_fk_pk_cols.index(pk_col)
+                                                    full_combo.append(single_combo[col_pos])
+                                            all_combinations.append(tuple(full_combo))
+                                    self.rng.shuffle(all_combinations)
+                                    pre_allocated_pk_tuples = all_combinations[:needed_rows]
+                            else:
+                                # Full Cartesian product
+                                all_combinations = []
+                                for comp_combo in composite_fk_pk_combos:
+                                    for single_combo in itertools.product(*pk_value_pools):
+                                        full_combo = []
+                                        for pk_col in all_pk_cols_in_order:
+                                            if pk_col in composite_fk_pk_combo_cols:
+                                                col_pos = composite_fk_pk_combo_cols.index(pk_col)
+                                                full_combo.append(comp_combo[col_pos])
+                                            elif pk_col in ordered_single_fk_pk_cols:
+                                                col_pos = ordered_single_fk_pk_cols.index(pk_col)
+                                                full_combo.append(single_combo[col_pos])
+                                        all_combinations.append(tuple(full_combo))
+                                self.rng.shuffle(all_combinations)
+                                pre_allocated_pk_tuples = all_combinations[:needed_rows]
+                        
+                        elif composite_fk_pk_combos:
+                            # Only composite FK combos (no single-column FK-PK columns)
+                            debug_print("{0}: Using only composite FK combinations".format(node))
+                            all_pk_cols_in_order = composite_fk_pk_combo_cols
+                            self.rng.shuffle(composite_fk_pk_combos)
+                            pre_allocated_pk_tuples = composite_fk_pk_combos[:needed_rows]
+                        
+                        elif pk_value_pools:
+                            # Only single-column FK-PK columns (original logic path)
+                            debug_print("{0}: Using only single-column FK Cartesian product".format(node))
+                            all_pk_cols_in_order = ordered_single_fk_pk_cols
                             
-                            # Shuffle pools for randomness
-                            for pool in pk_value_pools:
-                                self.rng.shuffle(pool)
-                            
-                            max_attempts = needed_rows * 10
-                            attempts = 0
-                            while len(pre_allocated_pk_tuples) < needed_rows and attempts < max_attempts:
-                                combo = tuple(self.rng.choice(pool) for pool in pk_value_pools)
-                                if combo not in used_combos:
-                                    used_combos.add(combo)
-                                    pre_allocated_pk_tuples.append(combo)
-                                attempts += 1
-                            
-                            if len(pre_allocated_pk_tuples) < needed_rows:
-                                # Fallback: generate all combinations if random sampling failed
-                                debug_print("{0}: Random sampling got {1}, falling back to full generation".format(
-                                    node, len(pre_allocated_pk_tuples)))
+                            if needed_rows < max_combinations and max_combinations > 100000:
+                                # Random sampling
+                                debug_print("{0}: Using random sampling ({1} of {2} combinations)".format(
+                                    node, needed_rows, max_combinations))
+                                
+                                used_combos = set()
+                                pre_allocated_pk_tuples = []
+                                
+                                for pool in pk_value_pools:
+                                    self.rng.shuffle(pool)
+                                
+                                max_attempts = needed_rows * 10
+                                attempts = 0
+                                while len(pre_allocated_pk_tuples) < needed_rows and attempts < max_attempts:
+                                    combo = tuple(self.rng.choice(pool) for pool in pk_value_pools)
+                                    if combo not in used_combos:
+                                        used_combos.add(combo)
+                                        pre_allocated_pk_tuples.append(combo)
+                                    attempts += 1
+                                
+                                if len(pre_allocated_pk_tuples) < needed_rows:
+                                    debug_print("{0}: Random sampling got {1}, falling back to full generation".format(
+                                        node, len(pre_allocated_pk_tuples)))
+                                    all_combinations = list(itertools.product(*pk_value_pools))
+                                    self.rng.shuffle(all_combinations)
+                                    pre_allocated_pk_tuples = all_combinations[:needed_rows]
+                            else:
                                 all_combinations = list(itertools.product(*pk_value_pools))
                                 self.rng.shuffle(all_combinations)
                                 pre_allocated_pk_tuples = all_combinations[:needed_rows]
-                        else:
-                            # Generate all combinations using Cartesian product
-                            all_combinations = list(itertools.product(*pk_value_pools))
-                            self.rng.shuffle(all_combinations)
-                            
-                            # Take only as many as we need
-                            pre_allocated_pk_tuples = all_combinations[:needed_rows]
                         
-                        # Store the column order for partial tuple assignment
-                        pre_allocated_pk_cols = ordered_single_fk_pk_cols
+                        # Store the column order for tuple assignment
+                        pre_allocated_pk_cols = all_pk_cols_in_order
                         debug_print("{0}: Pre-allocated {1} unique PK tuples for columns {2}".format(
                             node, len(pre_allocated_pk_tuples), pre_allocated_pk_cols))
                     else:
-                        # pk_value_pools is empty - parent values missing
-                        debug_print("{0}: Cannot generate Cartesian product - missing parent values for some PK-FK columns".format(node))
+                        # No data available for Cartesian product
+                        debug_print("{0}: Cannot generate Cartesian product - missing parent values".format(node))
                         debug_print("{0}: All FK columns: {1}".format(node, all_fk_columns))
                         debug_print("{0}: Parent caches available for: {1}".format(node, list(parent_caches.keys())))
                 else:
-                    # Not enough single-column FK-PK columns for Cartesian product
-                    debug_print("{0}: Only {1} PK column(s) are single-column FKs (need >=2 for Cartesian product)".format(
-                        node, len(pk_cols_that_are_single_fks)))
+                    # No single-column FK-PK columns and no composite FKs with PK overlap
+                    debug_print("{0}: No single-column FK-PK columns and no composite FKs with PK overlap".format(node))
         
         filtered_parent_caches = {}
         for comp in composite_cfgs:
@@ -760,6 +901,15 @@ class FastSyntheticGenerator:
                 
                 if skip_this_fk:
                     continue
+                
+                # Skip composite FK if all its PK-overlapping columns were pre-assigned via hybrid Cartesian
+                if pre_allocated_pk_tuples and pre_allocated_pk_cols:
+                    fk_pk_overlap = set(fk_child_cols) & set(tmeta.pk_columns)
+                    pre_assigned_set = set(pre_allocated_pk_cols)
+                    if fk_pk_overlap and fk_pk_overlap.issubset(pre_assigned_set):
+                        debug_print("{0}: Skipping composite FK {1} - PK columns {2} already pre-assigned".format(
+                            node, comp['constraint_name'], fk_pk_overlap))
+                        continue
                 
                 has_pk_fk = any(child_col in pk_fk_columns for child_col in fk_child_cols)
                 
