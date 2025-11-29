@@ -571,7 +571,7 @@ class FastSyntheticGenerator:
                 # - At least 1 PK column is a single-column FK, OR
                 # - Composite FKs contain PK columns that can be combined
                 # This enables optimization when some PK columns are in composite FKs
-                if len(pk_cols_that_are_single_fks) >= 1 or composite_fk_with_pk:
+                if pk_cols_that_are_single_fks or composite_fk_with_pk:
                     debug_print("{0}: {1} PK column(s) are single-column FKs - attempting hybrid Cartesian product".format(
                         node, len(pk_cols_that_are_single_fks)))
                     
@@ -629,7 +629,9 @@ class FastSyntheticGenerator:
                                 composite_fk_pk_combo_cols = pk_cols_in_this_fk
                                 debug_print("{0}: Found {1} unique composite FK combinations for PK columns {2}".format(
                                     node, len(composite_fk_pk_combos), composite_fk_pk_combo_cols))
-                                break  # Use first composite FK with PK overlap
+                                # Use first composite FK with PK overlap; subsequent ones ignored
+                                # (multiple overlapping composite FKs would require more complex merging)
+                                break
                     
                     # Generate hybrid Cartesian product if we have data
                     can_generate = (pk_value_pools or composite_fk_pk_combos)
@@ -664,7 +666,7 @@ class FastSyntheticGenerator:
                             if pk_col in composite_fk_pk_combo_cols or pk_col in ordered_single_fk_pk_cols:
                                 all_pk_cols_in_order.append(pk_col)
                         
-                        # Generate all combinations
+                        # Generate hybrid Cartesian product: composite FK combos × single-column FK values
                         if composite_fk_pk_combos and pk_value_pools:
                             # Hybrid: composite FK combos × single-column FK values
                             debug_print("{0}: Generating hybrid Cartesian product".format(node))
