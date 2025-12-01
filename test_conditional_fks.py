@@ -269,13 +269,20 @@ class TestCompositeConditionalFKs(unittest.TestCase):
         self.assertEqual(composite_fks[0]["condition"], "type = 'A'")
 
 
+class MockFK:
+    """Mock FK object for testing parent cache logic"""
+    def __init__(self, constraint_name, column_name, condition):
+        self.constraint_name = constraint_name
+        self.column_name = column_name
+        self.condition = condition
+
+
 class TestConditionalFKParentCaching(unittest.TestCase):
     """Test that conditional FKs properly populate parent_caches for Cartesian product"""
     
     def test_conditional_fk_parent_values_combined(self):
         """Test that conditional FK parent values are combined for Cartesian product"""
         from collections import defaultdict
-        from generate_synthetic_data_utils import debug_print
         
         # Simulate the fix logic: combining conditional FK parent values into parent_caches
         # This mimics what happens in resolve_fks_batch() after the fix
@@ -288,12 +295,6 @@ class TestConditionalFKParentCaching(unittest.TestCase):
         
         # FKs grouped by column (as created by conditional_fks_by_column)
         # Key is column name, value is list of FK objects with constraint_name attribute
-        class MockFK:
-            def __init__(self, constraint_name, column_name, condition):
-                self.constraint_name = constraint_name
-                self.column_name = column_name
-                self.condition = condition
-        
         conditional_fks_by_column = defaultdict(list)
         conditional_fks_by_column['P_ID'].append(MockFK('LOGICAL_A_P_ID_W', 'P_ID', "T = 'some_string'"))
         conditional_fks_by_column['P_ID'].append(MockFK('LOGICAL_A_P_ID_H', 'P_ID', "T = 'some_other_string'"))
@@ -324,12 +325,6 @@ class TestConditionalFKParentCaching(unittest.TestCase):
             'LOGICAL_A_P_ID_W': [1, 2, 3],
         }
         
-        class MockFK:
-            def __init__(self, constraint_name, column_name, condition):
-                self.constraint_name = constraint_name
-                self.column_name = column_name
-                self.condition = condition
-        
         conditional_fks_by_column = defaultdict(list)
         conditional_fks_by_column['P_ID'].append(MockFK('LOGICAL_A_P_ID_W', 'P_ID', "T = 'some_string'"))
         
@@ -354,12 +349,6 @@ class TestConditionalFKParentCaching(unittest.TestCase):
         from collections import defaultdict
         
         conditional_fk_caches = {}  # Empty caches
-        
-        class MockFK:
-            def __init__(self, constraint_name, column_name, condition):
-                self.constraint_name = constraint_name
-                self.column_name = column_name
-                self.condition = condition
         
         conditional_fks_by_column = defaultdict(list)
         conditional_fks_by_column['P_ID'].append(MockFK('LOGICAL_A_P_ID_W', 'P_ID', "T = 'some_string'"))
