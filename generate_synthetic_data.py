@@ -90,7 +90,7 @@ def load_unique_constraints(conn, schema, table):
 def load_fk_constraints_for_schema(conn, schema):
     cur = conn.cursor()
     cur.execute("SELECT CONSTRAINT_NAME, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=%s AND REFERENCED_TABLE_NAME IS NOT NULL", (schema,))
-    return [FKMeta(*r, is_logical=False) for r in cur.fetchall()]
+    return [FKMeta(*r, is_logical=False, condition=None) for r in cur.fetchall()]
 
 def sample_static_fk_values(conn, static_schema, static_table, static_column, sample_size, rng):
     cur = conn.cursor()
@@ -116,13 +116,14 @@ def load_logical_fks_from_config(config):
                 ref_schema, ref_table, ref_column = lfk["referenced_schema"], lfk["referenced_table"], lfk["referenced_column"]
                 if ignore_self_refs and ref_schema == tschema and ref_table == tname:
                     continue
-                single_fks.append(FKMeta(lfk. get("constraint_name", "LOGICAL_{0}_{1}".format(tname, cname)), tschema, tname, cname, ref_schema, ref_table, ref_column, True))
+                condition = lfk.get("condition")  # Support conditional FK
+                single_fks.append(FKMeta(lfk.get("constraint_name", "LOGICAL_{0}_{1}".format(tname, cname)), tschema, tname, cname, ref_schema, ref_table, ref_column, True, condition))
             elif "child_columns" in lfk and "referenced_columns" in lfk:
                 child_cols, parent_cols = tuple(lfk["child_columns"]), tuple(lfk["referenced_columns"])
                 ref_schema, ref_table = lfk["referenced_schema"], lfk["referenced_table"]
                 if ignore_self_refs and ref_schema == tschema and ref_table == tname:
                     continue
-                composite_fks.append({"constraint_name": lfk.get("constraint_name", "LOGICAL_{0}_{1}".format(tname, '_'.join(child_cols))), "table_schema": tschema, "table_name": tname, "child_columns": child_cols, "referenced_table_schema": ref_schema, "referenced_table_name": ref_table, "referenced_columns": parent_cols, "population_rate": lfk.get("population_rate")})
+                composite_fks.append({"constraint_name": lfk.get("constraint_name", "LOGICAL_{0}_{1}".format(tname, '_'.join(child_cols))), "table_schema": tschema, "table_name": tname, "child_columns": child_cols, "referenced_table_schema": ref_schema, "referenced_table_name": ref_table, "referenced_columns": parent_cols, "population_rate": lfk.get("population_rate"), "condition": lfk.get("condition")})
     return single_fks, composite_fks
 
 def load_config(path):
@@ -499,14 +500,27 @@ class FastSyntheticGenerator:
             all_unique_cols.update(uc.columns)
         
         parent_caches = {}
+        # For conditional FKs, store parent values keyed by constraint name
+        conditional_fk_caches = {}
         for fk in self.fks:
             if "{0}.{1}".format(fk.table_schema, fk.table_name) == node:
-                parent_table = "{0}.{1}". format(fk.referenced_table_schema, fk.referenced_table_name)
+                parent_table = "{0}.{1}".format(fk.referenced_table_schema, fk.referenced_table_name)
                 if parent_table in self.generated_rows:
                     parent_rows = self.generated_rows[parent_table]
                     parent_col = fk.referenced_column_name
                     parent_vals = [r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]
-                    parent_caches[fk. column_name] = parent_vals
+                    if fk.condition:
+                        # Conditional FK - store by constraint name
+                        conditional_fk_caches[fk.constraint_name] = parent_vals
+                    else:
+                        # Unconditional FK - store by column name (backward compatible)
+                        parent_caches[fk.column_name] = parent_vals
+        
+        # Group conditional FKs by column for priority resolution
+        conditional_fks_by_column = defaultdict(list)
+        for fk in self.fks:
+            if "{0}.{1}".format(fk.table_schema, fk.table_name) == node and fk.condition:
+                conditional_fks_by_column[fk.column_name].append(fk)
         
         composite_cfgs = self.find_composite_fks_for_child(node)
         composite_columns_all = set()
@@ -994,11 +1008,50 @@ class FastSyntheticGenerator:
             if row_skipped:
                 continue
             
+            # Track which columns have been assigned by conditional FKs
+            assigned_by_conditional_fk = set()
+            
+            # First, resolve conditional FKs - evaluate conditions and apply matching FK
+            for fk_col, fk_list in conditional_fks_by_column.items():
+                if fk_col in composite_columns_all:
+                    continue
+                if cfg and any(sf["column"] == fk_col for sf in cfg.get("static_fks", [])):
+                    continue
+                if pre_allocated_pk_tuples and fk_col in pk_fk_columns:
+                    continue
+                
+                # Find the first FK whose condition matches
+                for fk in fk_list:
+                    if evaluate_fk_condition(fk.condition, temp_row):
+                        parent_vals = conditional_fk_caches.get(fk.constraint_name, [])
+                        if parent_vals:
+                            temp_row[fk_col] = self.rng.choice(parent_vals)
+                            assigned_by_conditional_fk.add(fk_col)
+                            debug_print("{0}: Conditional FK {1} matched (condition: {2}), assigned {3}={4}".format(
+                                node, fk.constraint_name, fk.condition, fk_col, temp_row[fk_col]))
+                            break  # Found matching FK, stop checking others for this column
+                        else:
+                            debug_print("{0}: Conditional FK {1} matched but no parent values available".format(
+                                node, fk.constraint_name))
+                    else:
+                        debug_print("{0}: Skipping FK {1} - condition not met ({2})".format(
+                            node, fk.constraint_name, fk.condition))
+            
+            # Then, resolve unconditional FKs (skip columns already handled by conditional FKs)
             for fk in self.fks:
                 if "{0}.{1}".format(fk.table_schema, fk.table_name) != node:
                     continue
                 
+                # Skip conditional FKs - they were handled above
+                if fk.condition:
+                    continue
+                
                 fk_col = fk.column_name
+                
+                # Skip if already assigned by a conditional FK
+                if fk_col in assigned_by_conditional_fk:
+                    continue
+                
                 if fk_col in composite_columns_all:
                     continue
                 if cfg and any(sf["column"] == fk_col for sf in cfg.get("static_fks", [])):
@@ -1008,7 +1061,7 @@ class FastSyntheticGenerator:
                 if pre_allocated_pk_tuples and fk_col in pk_fk_columns:
                     continue
                 
-                col_meta = next((c for c in tmeta.columns if c. name == fk_col), None)
+                col_meta = next((c for c in tmeta.columns if c.name == fk_col), None)
                 if col_meta and col_meta.is_nullable == "NO":
                     if pre_allocated_pk and fk_col in pk_fk_columns:
                         temp_row[fk_col] = pre_allocated_pk[row_idx]
