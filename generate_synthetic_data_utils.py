@@ -310,6 +310,156 @@ def evaluate_fk_condition(condition_str, row):
     
     return False
 
+
+def generate_unique_value_pool(col_meta, config, needed_count, rng):
+    """
+    Generate a pool of unique values for a column based on its configuration.
+    Used to pre-allocate unique values for columns with UNIQUE constraints.
+    
+    Args:
+        col_meta: ColumnMeta object
+        config: populate_columns configuration dict with 'min'/'max' or 'values'
+        needed_count: number of unique values needed
+        rng: random number generator
+    
+    Returns:
+        List of unique values (shuffled)
+    """
+    dtype = (col_meta.data_type or "").lower()
+    
+    # If values array is specified, use it
+    if "values" in config:
+        values = config["values"]
+        if len(values) < needed_count:
+            print("WARNING: Column {0} has {1} unique values but {2} rows requested".format(
+                col_meta.name, len(values), needed_count), file=sys.stderr)
+        # Shuffle and return
+        pool = list(values)
+        rng.shuffle(pool)
+        return pool
+    
+    # For numeric types with min/max
+    if dtype in ("int", "integer", "bigint", "smallint", "tinyint", "mediumint"):
+        min_val = config.get("min", 1)
+        max_val = config.get("max", 2147483647)
+        
+        range_size = int(max_val) - int(min_val) + 1
+        if range_size < needed_count:
+            print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
+                col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
+        
+        # For large ranges, sample instead of generating all
+        if range_size > needed_count * 2 and range_size > 100000:
+            # Random sampling for large ranges
+            unique_values = set()
+            max_attempts = needed_count * 10
+            attempts = 0
+            while len(unique_values) < needed_count and attempts < max_attempts:
+                val = rng.randint(int(min_val), int(max_val))
+                unique_values.add(val)
+                attempts += 1
+            pool = list(unique_values)
+        else:
+            # Generate all possible values in range and shuffle
+            all_values = list(range(int(min_val), int(max_val) + 1))
+            rng.shuffle(all_values)
+            pool = all_values[:needed_count]
+        
+        return pool
+    
+    elif dtype in ("decimal", "numeric", "float", "double", "real"):
+        min_val = config.get("min", 0.0)
+        max_val = config.get("max", 1000000.0)
+        
+        # For floats, generate random unique values
+        # Use a set to ensure uniqueness
+        unique_values = set()
+        attempts = 0
+        max_attempts = needed_count * 10
+        
+        while len(unique_values) < needed_count and attempts < max_attempts:
+            val = round(rng.uniform(float(min_val), float(max_val)), 2)
+            unique_values.add(val)
+            attempts += 1
+        
+        if len(unique_values) < needed_count:
+            print("WARNING: Column {0} could only generate {1} unique float values after {2} attempts".format(
+                col_meta.name, len(unique_values), max_attempts), file=sys.stderr)
+        
+        pool = list(unique_values)
+        rng.shuffle(pool)
+        return pool
+    
+    elif dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
+        # For strings with values, this is handled above
+        # For strings without values (just min/max which doesn't apply), fall through
+        # Generate random strings with guaranteed uniqueness
+        unique_values = set()
+        max_length = col_meta.char_max_length or 20
+        
+        attempts = 0
+        max_attempts = needed_count * 10
+        
+        while len(unique_values) < needed_count and attempts < max_attempts:
+            # Generate random string
+            length = rng.randint(5, min(max_length, 20))
+            val = ''.join(rng.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
+            unique_values.add(val)
+            attempts += 1
+        
+        pool = list(unique_values)
+        rng.shuffle(pool)
+        return pool
+    
+    elif dtype in ("date", "datetime", "timestamp"):
+        min_val = config.get("min")
+        max_val = config.get("max")
+        
+        if min_val and max_val:
+            min_date = parse_date(str(min_val))
+            max_date = parse_date(str(max_val))
+            
+            if min_date and max_date:
+                delta_days = (max_date - min_date).days
+                
+                if delta_days < needed_count:
+                    print("WARNING: Column {0} date range has only {1} days but {2} rows requested".format(
+                        col_meta.name, delta_days + 1, needed_count), file=sys.stderr)
+                
+                # Generate unique dates
+                if delta_days + 1 > needed_count * 2 and delta_days + 1 > 100000:
+                    # Random sampling for large date ranges
+                    unique_days = set()
+                    max_attempts = needed_count * 10
+                    attempts = 0
+                    while len(unique_days) < needed_count and attempts < max_attempts:
+                        day_offset = rng.randint(0, delta_days)
+                        unique_days.add(day_offset)
+                        attempts += 1
+                    day_offsets = list(unique_days)
+                else:
+                    all_days = list(range(delta_days + 1))
+                    rng.shuffle(all_days)
+                    day_offsets = all_days[:needed_count]
+                
+                unique_dates = []
+                for day_offset in day_offsets:
+                    date_val = min_date + timedelta(days=day_offset)
+                    
+                    if dtype == "date":
+                        unique_dates.append(date_val.strftime("%Y-%m-%d"))
+                    else:
+                        # Add random time for datetime/timestamp to ensure uniqueness
+                        random_seconds = rng.randint(0, 86399)
+                        datetime_val = date_val + timedelta(seconds=random_seconds)
+                        unique_dates.append(datetime_val.strftime("%Y-%m-%d %H:%M:%S"))
+                
+                return unique_dates
+    
+    # Fallback: return empty pool
+    return []
+
+
 def sql_literal(value):
     if value is None:
         return "NULL"
