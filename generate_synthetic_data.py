@@ -384,8 +384,30 @@ class FastSyntheticGenerator:
         
         local_trackers = {uc.constraint_name: set() for uc in unique_constraints}
         
+        # Pre-allocate unique values for UNIQUE columns that have min/max or values config
+        batch_size = end_idx - start_idx
+        unique_value_pools = {}
+        for col_name in single_unique_cols:
+            if col_name in populate_config and col_name not in tmeta.pk_columns:
+                col_config = populate_config[col_name]
+                # Only pre-allocate if config has min/max or values (not just column name)
+                if "min" in col_config or "values" in col_config:
+                    col_meta = next((c for c in tmeta.columns if c.name == col_name), None)
+                    if col_meta:
+                        unique_pool = generate_unique_value_pool(col_meta, col_config, batch_size, thread_rng)
+                        if len(unique_pool) < batch_size:
+                            debug_print("{0}: WARNING: UNIQUE column {1} has insufficient unique values ({2} available, {3} needed)".format(
+                                node, col_name, len(unique_pool), batch_size))
+                        unique_value_pools[col_name] = unique_pool
+                        debug_print("{0}: Pre-allocated {1} unique values for column {2}".format(
+                            node, len(unique_pool), col_name))
+        
+        # Track which pre-allocated value to use next for each UNIQUE column
+        unique_value_indexes = {col: 0 for col in unique_value_pools.keys()}
+        
         for batch_idx in range(start_idx, end_idx):
             row = {}
+            row_offset = batch_idx - start_idx  # Index within this batch for pre-allocated values
             
             for col in tmeta.columns:
                 cname = col.name
@@ -420,6 +442,17 @@ class FastSyntheticGenerator:
                         continue
                 
                 base_value = None
+                
+                # Check if this column has pre-allocated unique values
+                if cname in unique_value_pools:
+                    pool = unique_value_pools[cname]
+                    if row_offset < len(pool):
+                        row[cname] = pool[row_offset]
+                    else:
+                        # Fall back to batch_idx if pool is exhausted
+                        debug_print("{0}: Pool exhausted for column {1}, using batch_idx fallback".format(node, cname))
+                        row[cname] = batch_idx
+                    continue
                 
                 # Check if this column has extended configuration
                 col_config = populate_config.get(cname)
