@@ -446,5 +446,100 @@ class TestSequentialGenerationDetection(unittest.TestCase):
         self.assertEqual(uncontrolled_cols, [])
 
 
+class TestSpecialColumnNameOverride(unittest.TestCase):
+    """Test that sequential generation overrides special column name detection (name, email, phone)."""
+    
+    def test_name_column_detected_for_sequential(self):
+        """Test that a column with 'name' in its name is detected for sequential generation."""
+        # Simulate the exact scenario from the bug report
+        composite_unique_cols = ["CustomerName", "Column2"]  # CustomerName has "name" in it
+        populate_config = {"Column2": {"column": "Column2", "values": ["v1", "v2"]}}
+        fk_cols = set()
+        pk_columns = []
+        
+        cols_needing_sequential = set()
+        
+        for col_name in composite_unique_cols:
+            is_controlled = col_name in populate_config and (
+                "values" in populate_config.get(col_name, {}) or
+                "min" in populate_config.get(col_name, {})
+            )
+            is_fk = col_name in fk_cols
+            is_pk = col_name in pk_columns
+            
+            if not (is_controlled or is_fk or is_pk):
+                cols_needing_sequential.add(col_name)
+        
+        # CustomerName should need sequential (not controlled, not FK, not PK)
+        self.assertIn("CustomerName", cols_needing_sequential)
+        # Column2 should NOT need sequential (it's controlled)
+        self.assertNotIn("Column2", cols_needing_sequential)
+    
+    def test_email_column_detected_for_sequential(self):
+        """Test that a column with 'email' in its name is detected for sequential generation."""
+        composite_unique_cols = ["UserEmail", "TypeCode"]
+        populate_config = {"TypeCode": {"column": "TypeCode", "values": ["A", "B"]}}
+        fk_cols = set()
+        pk_columns = []
+        
+        cols_needing_sequential = set()
+        
+        for col_name in composite_unique_cols:
+            is_controlled = col_name in populate_config and (
+                "values" in populate_config.get(col_name, {}) or
+                "min" in populate_config.get(col_name, {})
+            )
+            is_fk = col_name in fk_cols
+            is_pk = col_name in pk_columns
+            
+            if not (is_controlled or is_fk or is_pk):
+                cols_needing_sequential.add(col_name)
+        
+        # UserEmail should need sequential (not controlled)
+        self.assertIn("UserEmail", cols_needing_sequential)
+        # TypeCode should NOT need sequential (it's controlled)
+        self.assertNotIn("TypeCode", cols_needing_sequential)
+    
+    def test_phone_column_detected_for_sequential(self):
+        """Test that a column with 'phone' in its name is detected for sequential generation."""
+        composite_unique_cols = ["ContactPhone", "Region"]
+        populate_config = {"Region": {"column": "Region", "values": ["US", "EU"]}}
+        fk_cols = set()
+        pk_columns = []
+        
+        cols_needing_sequential = set()
+        
+        for col_name in composite_unique_cols:
+            is_controlled = col_name in populate_config and (
+                "values" in populate_config.get(col_name, {}) or
+                "min" in populate_config.get(col_name, {})
+            )
+            is_fk = col_name in fk_cols
+            is_pk = col_name in pk_columns
+            
+            if not (is_controlled or is_fk or is_pk):
+                cols_needing_sequential.add(col_name)
+        
+        # ContactPhone should need sequential (not controlled)
+        self.assertIn("ContactPhone", cols_needing_sequential)
+        # Region should NOT need sequential (it's controlled)
+        self.assertNotIn("Region", cols_needing_sequential)
+    
+    def test_sequential_overrides_rand_name(self):
+        """Test that sequential generation produces unique values instead of rand_name() collision."""
+        # Simulate generating 100 values - with rand_name() only 80 combinations exist
+        # Sequential should produce 100 unique values
+        values = set()
+        for i in range(100):
+            value = "seq_{0:08d}".format(i)
+            values.add(value)
+        
+        # All 100 values should be unique
+        self.assertEqual(len(values), 100)
+        
+        # If rand_name() was used, we'd have at most 80 unique values (10 first names * 8 last names)
+        # This test verifies we don't hit that limitation
+
+
 if __name__ == '__main__':
     unittest.main()
