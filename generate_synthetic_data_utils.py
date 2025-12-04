@@ -259,6 +259,31 @@ def generate_value_with_config(rng, col, config=None):
         vals = [v.replace("''", "'") for v in m]
         return rng.choice(vals) if vals else None
     
+    # Handle set types
+    elif dtype == "set":
+        # Parse SET values from column_type: SET('val1','val2','val3')
+        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
+        set_values = [v.replace("''", "'") for v in m]
+        
+        if set_values:
+            # Generate random subset: select 0 to N values
+            num_values_to_select = rng.randint(0, len(set_values))
+            
+            if num_values_to_select == 0:
+                return ''  # Empty set
+            else:
+                # Shuffle and select subset
+                shuffled = list(set_values)
+                rng.shuffle(shuffled)
+                selected = shuffled[:num_values_to_select]
+                
+                # Sort selected values to maintain consistent ordering
+                # (MySQL SET internally orders values by definition order)
+                # Re-sort by original position in set_values
+                selected_sorted = [v for v in set_values if v in selected]
+                return ','.join(selected_sorted)
+        return ''  # No valid SET values, use empty
+    
     # Default: return random string for non-nullable columns
     elif col.is_nullable == "NO":
         return rand_string(rng, 8)
@@ -467,6 +492,35 @@ def generate_unique_value_pool(col_meta, config, needed_count, rng):
     
     # Fallback: return empty pool
     return []
+
+
+def validate_set_value(set_definition, value):
+    """
+    Validate that a SET value is valid according to the column definition.
+    
+    Args:
+        set_definition: The COLUMN_TYPE string, e.g., "set('a','b','c')"
+        value: The value to validate, e.g., "a,c"
+    
+    Returns:
+        bool: True if valid
+    """
+    if not value:  # Empty string is valid
+        return True
+    
+    # Parse allowed values
+    m = re.findall(r"'((?:[^']|(?:''))*)'", set_definition or "")
+    allowed_values = set([v.replace("''", "'") for v in m])
+    
+    # Parse provided value
+    provided_values = [v.strip() for v in str(value).split(',')]
+    
+    # Check all provided values are in allowed set
+    for pv in provided_values:
+        if pv not in allowed_values:
+            return False
+    
+    return True
 
 
 def sql_literal(value):
