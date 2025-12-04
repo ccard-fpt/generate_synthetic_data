@@ -524,6 +524,30 @@ class FastSyntheticGenerator:
                     m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
                     vals = [v.replace("''", "'") for v in m]
                     base_value = rand_choice(thread_rng, vals)
+                elif dtype == "set":
+                    # Parse SET values from column_type: SET('val1','val2','val3')
+                    m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
+                    set_values = [v.replace("''", "'") for v in m]
+                    
+                    if set_values:
+                        # Generate random subset: select 0 to N values
+                        num_values_to_select = thread_rng.randint(0, len(set_values))
+                        
+                        if num_values_to_select == 0:
+                            base_value = ''  # Empty set
+                        else:
+                            # Shuffle and select subset
+                            shuffled = list(set_values)
+                            thread_rng.shuffle(shuffled)
+                            selected = shuffled[:num_values_to_select]
+                            
+                            # Sort selected values to maintain consistent ordering
+                            # (MySQL SET internally orders values by definition order)
+                            # Re-sort by original position in set_values
+                            selected_sorted = [v for v in set_values if v in selected]
+                            base_value = ','.join(selected_sorted)
+                    else:
+                        base_value = ''  # No valid SET values, use empty
                 elif col.is_nullable == "NO":
                     base_value = rand_string(thread_rng, 8)
                 
