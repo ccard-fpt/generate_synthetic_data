@@ -268,6 +268,29 @@ class TestValidatePopulateColumnConfig(unittest.TestCase):
         config = {"column": "created_date", "min": "invalid-date", "max": "2024-12-31"}
         result = validate_populate_column_config(col, config)
         self.assertFalse(result)
+    
+    def test_validate_format_string_with_no_placeholder(self):
+        """Test validation warns when format string has no placeholders"""
+        col = self._make_column("code", "varchar")
+        config = {"column": "code", "min": 1, "max": 100, "format": "no_placeholder"}
+        # Should still return True (warning only) but will print a warning
+        result = validate_populate_column_config(col, config)
+        self.assertTrue(result)
+    
+    def test_validate_format_string_valid(self):
+        """Test validation passes for valid format string"""
+        col = self._make_column("code", "varchar")
+        config = {"column": "code", "min": 1, "max": 100, "format": "User_{:08d}"}
+        result = validate_populate_column_config(col, config)
+        self.assertTrue(result)
+    
+    def test_validate_format_string_without_min_max(self):
+        """Test validation warns when format is provided without min/max"""
+        col = self._make_column("code", "varchar")
+        config = {"column": "code", "format": "User_{:08d}"}
+        # Should still return True (warning only) but will print a warning
+        result = validate_populate_column_config(col, config)
+        self.assertTrue(result)
 
 
 class TestGenerateValueWithConfig(unittest.TestCase):

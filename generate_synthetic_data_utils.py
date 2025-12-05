@@ -74,6 +74,25 @@ def validate_populate_column_config(col_meta, config):
         print("WARNING: Column {0} has both 'values' and 'min/max' - 'values' will take precedence".format(
             col_meta.name), file=sys.stderr)
     
+    # Validate format string for string types (independent of min/max)
+    if "format" in config and dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
+        format_str = config["format"]
+        if "{" not in format_str or "}" not in format_str:
+            print("WARNING: format string '{0}' for column {1} has no placeholders".format(
+                format_str, col_meta.name), file=sys.stderr)
+        else:
+            # Test the format string with a sample value
+            try:
+                format_str.format(1)
+            except (ValueError, KeyError, IndexError) as e:
+                print("WARNING: format string '{0}' for column {1} is invalid: {2}".format(
+                    format_str, col_meta.name, e), file=sys.stderr)
+        
+        # Warn if format is provided without min/max
+        if "min" not in config or "max" not in config:
+            print("WARNING: Column {0} has 'format' but no 'min'/'max' range - format will be ignored".format(
+                col_meta.name), file=sys.stderr)
+    
     if "min" in config and "max" in config:
         min_val = config["min"]
         max_val = config["max"]
@@ -91,14 +110,6 @@ def validate_populate_column_config(col_meta, config):
                 print("ERROR: Column {0} has min >= max ({1} >= {2})".format(
                     col_meta.name, min_val, max_val), file=sys.stderr)
                 return False
-        
-        # String type with min/max: validate format string if provided
-        if dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
-            if "format" in config:
-                format_str = config["format"]
-                if "{" not in format_str or "}" not in format_str:
-                    print("WARNING: format string '{0}' for column {1} has no placeholders".format(
-                        format_str, col_meta.name), file=sys.stderr)
         
         # Date validation
         if dtype in ("date", "datetime", "timestamp"):
