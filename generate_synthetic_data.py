@@ -1137,6 +1137,111 @@ class FastSyntheticGenerator:
                     # No single-column FK-PK columns and no composite FKs with PK overlap
                     debug_print("{0}: No single-column FK-PK columns and no composite FKs with PK overlap".format(node))
         
+        # Check for composite UNIQUE constraints where all columns are FKs
+        # (only if PK didn't already use Cartesian product)
+        pre_allocated_unique_fk_tuples = {}
+        
+        if not pk_fk_columns and tmeta.unique_constraints:
+            unique_fk_constraints = []
+            fk_map = {}
+            
+            # Build FK map for quick lookup
+            for fk in self.fks:
+                if "{0}.{1}".format(fk.table_schema, fk.table_name) == node:
+                    fk_map[fk.column_name] = fk
+            
+            for uc in tmeta.unique_constraints:
+                # Skip single-column UNIQUE (already handled by unique value pools)
+                if len(uc.columns) < 2:
+                    continue
+                
+                # Check if ALL columns in this UNIQUE constraint are FKs
+                all_fks = all(col in fk_map for col in uc.columns)
+                
+                if all_fks:
+                    unique_fk_constraints.append(uc)
+            
+            # If we have composite UNIQUE constraints with all FKs, use Cartesian product
+            if unique_fk_constraints:
+                # Use the first such constraint (usually there's only one)
+                uc = unique_fk_constraints[0]
+                
+                if len(unique_fk_constraints) > 1:
+                    debug_print("{0}: Multiple composite UNIQUE constraints with all FKs found. Using: {1}".format(
+                        node, uc.constraint_name))
+                
+                debug_print("{0}: Composite UNIQUE {1} has all FK columns: {2}. Using Cartesian product.".format(
+                    node, uc.constraint_name, uc.columns))
+                
+                # Load parent values for each FK column in the constraint
+                parent_value_lists = []
+                parent_col_names = []
+                all_parents_loaded = True
+                
+                for col_name in uc.columns:
+                    fk = fk_map[col_name]
+                    parent_node = "{0}.{1}".format(fk.referenced_table_schema, fk.referenced_table_name)
+                    parent_col = fk.referenced_column_name
+                    
+                    # Load parent values from generated_rows
+                    parent_vals = []
+                    if parent_node in self.generated_rows:
+                        parent_rows = self.generated_rows[parent_node]
+                        parent_vals = [r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]
+                        parent_vals = list(set(parent_vals))  # Get unique values
+                    
+                    if not parent_vals:
+                        print("ERROR: No parent values found for FK {0} -> {1}.{2}".format(
+                            col_name, parent_node, parent_col), file=sys.stderr)
+                        all_parents_loaded = False
+                        break
+                    
+                    debug_print("{0}: Loaded {1} parent values for {2} from {3}.{4}".format(
+                        node, len(parent_vals), col_name, parent_node, parent_col))
+                    
+                    parent_value_lists.append(parent_vals)
+                    parent_col_names.append(col_name)
+                
+                # Only proceed if we have all parent values
+                if all_parents_loaded and len(parent_value_lists) == len(uc.columns):
+                    # Generate Cartesian product
+                    all_combinations = list(itertools.product(*parent_value_lists))
+                    
+                    debug_print("{0}: Generated {1} total combinations from Cartesian product".format(
+                        node, len(all_combinations)))
+                    
+                    # Check if we have enough combinations
+                    if len(all_combinations) < len(rows):
+                        print("WARNING: {0} only has {1} unique FK combinations but {2} rows requested. Will generate duplicates.".format(
+                            node, len(all_combinations), len(rows)), file=sys.stderr)
+                        # Repeat combinations to reach total_rows using modulo for memory efficiency
+                        extended_combinations = []
+                        for i in range(len(rows)):
+                            extended_combinations.append(all_combinations[i % len(all_combinations)])
+                        all_combinations = extended_combinations
+                    else:
+                        # Sample random subset of combinations
+                        self.rng.shuffle(all_combinations)
+                        all_combinations = all_combinations[:len(rows)]
+                    
+                    # Pre-allocate the FK tuples for these rows
+                    for i, combo in enumerate(all_combinations):
+                        for j, col_name in enumerate(parent_col_names):
+                            if col_name not in pre_allocated_unique_fk_tuples:
+                                pre_allocated_unique_fk_tuples[col_name] = {}
+                            pre_allocated_unique_fk_tuples[col_name][i] = combo[j]
+                    
+                    debug_print("{0}: Pre-allocated {1} unique FK tuples for UNIQUE constraint {2}".format(
+                        node, len(all_combinations), uc.constraint_name))
+                    
+                    # Check for fk_ratios conflicts and warn
+                    if cfg:
+                        fk_ratios = cfg.get("fk_ratios", {})
+                        for col in uc.columns:
+                            if col in fk_ratios:
+                                print("WARNING: {0}: fk_ratios for column {1} will be ignored because it's in a composite UNIQUE constraint with Cartesian product".format(
+                                    node, col), file=sys.stderr)
+        
         filtered_parent_caches = {}
         for comp in composite_cfgs:
             fk_child_cols = comp["child_columns"]
@@ -1244,6 +1349,16 @@ class FastSyntheticGenerator:
                 if skip_this_fk:
                     continue
                 
+                # Skip composite FK if all its columns were pre-assigned via UNIQUE constraint Cartesian product
+                if pre_allocated_unique_fk_tuples:
+                    fk_cols_pre_allocated = all(child_col in pre_allocated_unique_fk_tuples for child_col in fk_child_cols)
+                    if fk_cols_pre_allocated:
+                        if comp['constraint_name'] not in logged_skipped_fks:
+                            debug_print("{0}: Skipping composite FK {1} - columns {2} already pre-assigned via UNIQUE constraint Cartesian product".format(
+                                node, comp['constraint_name'], fk_child_cols))
+                            logged_skipped_fks.add(comp['constraint_name'])
+                        continue
+                
                 # Skip composite FK if all its PK-overlapping columns were pre-assigned via hybrid Cartesian
                 if pre_allocated_pk_tuples and pre_allocated_pk_cols:
                     fk_pk_overlap = set(fk_child_cols) & set(tmeta.pk_columns)
@@ -1310,10 +1425,17 @@ class FastSyntheticGenerator:
             if row_skipped:
                 continue
             
-            # Track which columns have been assigned by conditional FKs
+            # Track which columns have been assigned by conditional FKs or pre-allocated UNIQUE FKs
             assigned_by_conditional_fk = set()
             
-            # First, resolve conditional FKs - evaluate conditions and apply matching FK
+            # First, assign pre-allocated UNIQUE FK values (from Cartesian product)
+            if pre_allocated_unique_fk_tuples:
+                for col_name, value_map in pre_allocated_unique_fk_tuples.items():
+                    if row_idx in value_map:
+                        temp_row[col_name] = value_map[row_idx]
+                        assigned_by_conditional_fk.add(col_name)  # Mark as assigned
+            
+            # Second, resolve conditional FKs - evaluate conditions and apply matching FK
             for fk_col, fk_list in conditional_fks_by_column.items():
                 if fk_col in composite_columns_all:
                     continue
