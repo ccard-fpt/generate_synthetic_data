@@ -6,7 +6,6 @@ use Cartesian product to guarantee uniqueness.
 """
 import unittest
 import random
-from collections import defaultdict
 from generate_synthetic_data_utils import (
     ColumnMeta,
     UniqueConstraint,
@@ -156,6 +155,7 @@ class TestCartesianProductGeneration(unittest.TestCase):
         import itertools
         import random
         
+        # Using seed for reproducible test results
         rng = random.Random(42)
         
         parent_a_values = list(range(1, 101))  # 100 values
@@ -342,7 +342,7 @@ class TestUniquenessGuarantee(unittest.TestCase):
         # Request 6000 rows
         needed_rows = 6000
         
-        # Sample combinations
+        # Sample combinations with reproducible seed for testing
         rng = random.Random(42)
         rng.shuffle(all_combinations)
         sampled = all_combinations[:needed_rows]

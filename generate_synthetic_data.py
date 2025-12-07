@@ -1176,6 +1176,7 @@ class FastSyntheticGenerator:
                 # Load parent values for each FK column in the constraint
                 parent_value_lists = []
                 parent_col_names = []
+                all_parents_loaded = True
                 
                 for col_name in uc.columns:
                     fk = fk_map[col_name]
@@ -1192,6 +1193,7 @@ class FastSyntheticGenerator:
                     if not parent_vals:
                         print("ERROR: No parent values found for FK {0} -> {1}.{2}".format(
                             col_name, parent_node, parent_col), file=sys.stderr)
+                        all_parents_loaded = False
                         break
                     
                     debug_print("{0}: Loaded {1} parent values for {2} from {3}.{4}".format(
@@ -1201,7 +1203,7 @@ class FastSyntheticGenerator:
                     parent_col_names.append(col_name)
                 
                 # Only proceed if we have all parent values
-                if len(parent_value_lists) == len(uc.columns):
+                if all_parents_loaded and len(parent_value_lists) == len(uc.columns):
                     # Generate Cartesian product
                     all_combinations = list(itertools.product(*parent_value_lists))
                     
@@ -1212,9 +1214,11 @@ class FastSyntheticGenerator:
                     if len(all_combinations) < len(rows):
                         print("WARNING: {0} only has {1} unique FK combinations but {2} rows requested. Will generate duplicates.".format(
                             node, len(all_combinations), len(rows)), file=sys.stderr)
-                        # Repeat combinations to reach total_rows
-                        repetitions = (len(rows) // len(all_combinations)) + 1
-                        all_combinations = (all_combinations * repetitions)[:len(rows)]
+                        # Repeat combinations to reach total_rows using modulo for memory efficiency
+                        extended_combinations = []
+                        for i in range(len(rows)):
+                            extended_combinations.append(all_combinations[i % len(all_combinations)])
+                        all_combinations = extended_combinations
                     else:
                         # Sample random subset of combinations
                         self.rng.shuffle(all_combinations)
