@@ -222,6 +222,46 @@ class TestMultiConstraintCombinationGeneration(unittest.TestCase):
         # Verify uniqueness of (A_ID, C_ID) pairs
         acs_pairs = set((r["A_ID"], r["C_ID"]) for r in all_combinations)
         self.assertEqual(len(acs_pairs), 6)  # All should be unique
+    
+    def test_insufficient_combinations_repeats(self):
+        """Test handling when not enough unique combinations exist."""
+        # Scenario: Only 2 A_ID values, need 2 rows per A_ID = 4 total combos
+        # But requesting 10 rows - should repeat combinations
+        
+        shared_values = [1, 2]  # 2 A_ID values
+        rows_per_shared_combo = 2
+        requested_rows = 10
+        
+        pr_values = [0, 1]
+        c_id_values = [10, 20]
+        
+        # Generate all combinations
+        all_combinations = []
+        for shared_val in shared_values:
+            for local_idx in range(rows_per_shared_combo):
+                row_assignment = {"A_ID": shared_val}
+                row_assignment["PR"] = pr_values[local_idx % len(pr_values)]
+                row_assignment["C_ID"] = c_id_values[local_idx % len(c_id_values)]
+                all_combinations.append(row_assignment)
+        
+        # Only 4 unique combinations
+        self.assertEqual(len(all_combinations), 4)
+        
+        # Extend to 10 by repeating
+        if len(all_combinations) < requested_rows:
+            extended_combinations = []
+            for i in range(requested_rows):
+                extended_combinations.append(all_combinations[i % len(all_combinations)])
+            all_combinations = extended_combinations
+        
+        # Should now have 10 rows
+        self.assertEqual(len(all_combinations), 10)
+        
+        # But only 4 unique combinations
+        unique_combos = set()
+        for r in all_combinations:
+            unique_combos.add((r["A_ID"], r["PR"], r["C_ID"]))
+        self.assertEqual(len(unique_combos), 4)
 
 
 if __name__ == "__main__":

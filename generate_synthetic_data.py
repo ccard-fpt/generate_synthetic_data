@@ -1280,6 +1280,16 @@ class FastSyntheticGenerator:
                         
                         all_combinations.append(row_assignment)
                 
+                # Check if we have enough combinations
+                if len(all_combinations) < len(rows):
+                    print("WARNING: {0} only has {1} unique combinations for overlapping constraints but {2} rows requested. Will generate duplicates.".format(
+                        node, len(all_combinations), len(rows)), file=sys.stderr)
+                    # Repeat combinations to reach total_rows using modulo for memory efficiency
+                    extended_combinations = []
+                    for i in range(len(rows)):
+                        extended_combinations.append(all_combinations[i % len(all_combinations)])
+                    all_combinations = extended_combinations
+                
                 # Shuffle and take needed rows
                 self.rng.shuffle(all_combinations)
                 selected_combinations = all_combinations[:len(rows)]
