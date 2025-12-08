@@ -38,33 +38,37 @@ def simulate_multi_constraint_cartesian():
     print(f"  ACS (A_ID, C_ID): {acs_combos:,} combinations")
     print(f"  APR (A_ID, PR): {apr_combos:,} combinations")
     
-    # Simulate multi-constraint generation
+    # Simulate multi-constraint generation using true Cartesian product
     print("\nSimulating multi-constraint Cartesian product...")
     print("  Shared column: A_ID")
+    print("  Non-shared columns: PR, C_ID")
     
-    # Determine rows per shared value
-    # For each A_ID, we need max(len(PR values), len(C_ID values per A_ID needed))
-    # Since APR is tighter (6000 combos vs 30000), we need 2 rows per A_ID
-    rows_per_a_id = max(len(pr_values), 1)  # 2 rows per A_ID
-    
-    print(f"  Rows per A_ID value: {rows_per_a_id}")
-    
-    # Generate combinations
+    # Generate combinations using true Cartesian product
+    import itertools
     all_combinations = []
     
     a_id_values = [r["ID"] for r in table_a_rows]
     c_id_values = [r["ID"] for r in table_c_rows]
     
+    # Build value lists for non-shared columns
+    non_shared_value_lists = {
+        'PR': pr_values,
+        'C_ID': c_id_values
+    }
+    
+    non_shared_cols = list(non_shared_value_lists.keys())
+    value_lists = [non_shared_value_lists[col] for col in non_shared_cols]
+    
+    # Generate Cartesian product for each A_ID
     for a_id in a_id_values:
-        for local_idx in range(rows_per_a_id):
-            combination = {
-                "A_ID": a_id,
-                "PR": pr_values[local_idx % len(pr_values)],
-                "C_ID": c_id_values[local_idx % len(c_id_values)],
-            }
+        for combo in itertools.product(*value_lists):
+            combination = {"A_ID": a_id}
+            for col_name, value in zip(non_shared_cols, combo):
+                combination[col_name] = value
             all_combinations.append(combination)
     
-    print(f"  Generated {len(all_combinations):,} total combinations")
+    print(f"  Generated {len(all_combinations):,} total valid combinations")
+    print(f"  (3,000 A_IDs × 2 PR values × 10 C_ID values = {3000 * 2 * 10:,})")
     
     # Shuffle and select 6000
     random.seed(42)

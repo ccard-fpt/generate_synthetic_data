@@ -29,25 +29,26 @@ Table `db.AC` with:
 
 ### Multi-Constraint Cartesian Product
 
-The system now detects overlapping constraints and generates combinations that satisfy all of them.
+The system now detects overlapping constraints and generates a true Cartesian product of all non-shared column values.
 
-**Key Insight:** Both constraints share `A_ID`. For each A_ID value:
-- APR requires 2 different PR values (0, 1)
-- So each A_ID needs exactly 2 rows
+**Key Insight:** When constraints share columns, we need to generate combinations that satisfy ALL constraints simultaneously. Instead of using MAX and modulo cycling, we use a true Cartesian product.
 
 **Strategy:**
 1. Detect constraints that share columns
 2. Identify the shared column(s)
-3. Calculate rows needed per shared value = max(unique values in non-shared columns)
-4. Generate combinations that cycle through all possible values
-5. Result: All constraints satisfied ✓
+3. Collect all non-shared column values across all constraints
+4. Generate the Cartesian product of all non-shared columns for each shared value
+5. Result: Maximum diversity of valid combinations
 
-**New Behavior:**
-- Both constraints detected as overlapping
-- Shared column: A_ID
-- Rows per A_ID: 2 (max of PR's 2 values and C_ID's 10 values)
-- 6000 unique (A_ID, PR) pairs ✓
-- 6000 unique (A_ID, C_ID) pairs ✓
+**Example with A_ID shared, PR (2 values), C_ID (10 values):**
+- Generate Cartesian product: 3000 A_IDs × (2 PR × 10 C_ID) = **60,000 combinations**
+- Each combination is a unique 3-tuple (A_ID, PR, C_ID)
+- Sample 6000 rows from these 60,000 combinations
+- Provides maximum diversity and minimizes duplicate constraint violations
+
+**Improvement over buggy approach:**
+- **Buggy**: MAX-based (10) with modulo cycling → 30,000 combinations → PR duplicates
+- **Fixed**: Cartesian product → 60,000 combinations → better distribution
 
 ## Implementation Details
 
@@ -85,40 +86,43 @@ for uc in constraint_group[1:]:
     shared_cols &= set(uc.columns)
 ```
 
-### Rows Per Shared Value Calculation (lines 1213-1236)
+### Combination Generation Using True Cartesian Product (lines 1213-1302)
 
-For each constraint, find non-shared columns and count their unique values.
-Take the maximum across all constraints.
+The system now generates a true Cartesian product of all non-shared column values:
 
 ```python
-rows_per_shared_combo = 1
+# Step 1: Build value lists for all non-shared columns
+non_shared_value_lists = {}
 
 for uc in constraint_group:
     non_shared_cols = [col for col in uc.columns if col not in shared_cols]
     
     for col_name in non_shared_cols:
-        # Count unique values (from FK parent or explicit config)
-        rows_per_shared_combo = max(rows_per_shared_combo, unique_count)
-```
+        if col_name not in non_shared_value_lists:
+            # Load values from FK parent or populate_columns config
+            non_shared_value_lists[col_name] = [...]
 
-### Combination Generation (lines 1252-1281)
-
-```python
+# Step 2: Generate Cartesian product
 all_combinations = []
+non_shared_cols = list(non_shared_value_lists.keys())
+value_lists = [non_shared_value_lists[col] for col in non_shared_cols]
+
 for shared_val in shared_values:
-    for local_idx in range(rows_per_shared_combo):
+    # Cartesian product of all non-shared column values
+    for combo in itertools.product(*value_lists):
         row_assignment = {primary_shared_col: shared_val}
         
-        # For each constraint's non-shared columns
-        for uc in constraint_group:
-            non_shared_cols = [col for col in uc.columns if col not in shared_cols]
-            
-            for col_name in non_shared_cols:
-                # Cycle through available values using modulo
-                row_assignment[col_name] = available_vals[local_idx % len(available_vals)]
+        # Assign non-shared column values
+        for col_name, value in zip(non_shared_cols, combo):
+            row_assignment[col_name] = value
         
         all_combinations.append(row_assignment)
 ```
+
+**Key Improvement**: Instead of using MAX and modulo cycling (which caused duplicates), the system now generates the full Cartesian product of all non-shared columns. This ensures:
+- All combinations are unique 3-tuples (shared + all non-shared columns)
+- Maximum diversity when sampling for the requested row count
+- No artificial constraint cycling that violates uniqueness
 
 ## Precedence Hierarchy
 
@@ -143,9 +147,11 @@ When overlapping constraints are detected:
 ```
 [DEBUG] db.AC: Found overlapping UNIQUE constraints: ['ACS', 'APR']
 [DEBUG] db.AC: Shared columns: ['A_ID']
-[DEBUG] db.AC: Rows per shared value combination: 2
+[DEBUG] db.AC: Generated 60000 total valid combinations
 [DEBUG] db.AC: Pre-allocated 6000 rows satisfying 2 constraints
 ```
+
+**Note**: The debug output now shows the total number of combinations generated using Cartesian product (60,000 for the example with 3000 A_IDs × 2 PR values × 10 C_ID values), instead of the old "Rows per shared value combination" metric.
 
 ## Edge Cases
 
