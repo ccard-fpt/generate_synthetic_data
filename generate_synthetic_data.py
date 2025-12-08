@@ -1210,16 +1210,18 @@ class FastSyntheticGenerator:
                 
                 debug_print("{0}: Shared columns: {1}".format(node, list(shared_cols)))
                 
-                # Determine rows needed per shared value combination
-                # This is the LCM or max of unique values in non-shared columns
-                rows_per_shared_combo = 1
+                # Build value lists for all non-shared columns across all constraints
+                non_shared_value_lists = {}
                 
                 for uc in constraint_group:
                     non_shared_cols = [col for col in uc.columns if col not in shared_cols]
                     
-                    # Count unique values for non-shared columns
                     for col_name in non_shared_cols:
+                        if col_name in non_shared_value_lists:
+                            continue  # Already collected
+                        
                         if col_name in fk_map:
+                            # FK column - load parent values
                             fk = fk_map[col_name]
                             parent_node = "{0}.{1}".format(fk.referenced_table_schema, fk.referenced_table_name)
                             parent_col = fk.referenced_column_name
@@ -1227,19 +1229,26 @@ class FastSyntheticGenerator:
                             if parent_node in self.generated_rows:
                                 parent_rows = self.generated_rows[parent_node]
                                 parent_vals = [r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]
-                                unique_count = len(set(parent_vals))
-                                rows_per_shared_combo = max(rows_per_shared_combo, unique_count)
+                                non_shared_value_lists[col_name] = list(set(parent_vals))
+                            else:
+                                print("ERROR: {0}: Parent table {1} not generated yet for FK column {2}".format(
+                                    node, parent_node, col_name), file=sys.stderr)
+                                non_shared_value_lists[col_name] = []
                         else:
+                            # Explicit values from populate_columns config
                             populate_config = self.populate_columns_config.get(node, {})
                             col_config = populate_config.get(col_name, {})
                             if "values" in col_config:
-                                rows_per_shared_combo = max(rows_per_shared_combo, len(col_config["values"]))
-                
-                debug_print("{0}: Rows per shared value combination: {1}".format(node, rows_per_shared_combo))
+                                non_shared_value_lists[col_name] = col_config["values"]
+                            else:
+                                print("ERROR: {0}: No values configured for non-shared column {1}".format(
+                                    node, col_name), file=sys.stderr)
+                                non_shared_value_lists[col_name] = []
                 
                 # Load values for shared columns
                 if not shared_cols:
                     print("ERROR: {0}: No shared columns found among overlapping constraints".format(node), file=sys.stderr)
+                    shared_values = []
                 else:
                     # Use sorted order for deterministic behavior
                     primary_shared_col = sorted(list(shared_cols))[0]
@@ -1263,43 +1272,34 @@ class FastSyntheticGenerator:
                     if not shared_values:
                         print("ERROR: {0}: No values found for shared column {1}".format(node, primary_shared_col), file=sys.stderr)
                 
-                # Generate row assignments
+                # Generate valid combinations using Cartesian product
                 all_combinations = []
-                for shared_val in shared_values:
-                    for local_idx in range(rows_per_shared_combo):
-                        row_assignment = {primary_shared_col: shared_val}
-                        
-                        # Assign values for each constraint's non-shared columns
-                        for uc in constraint_group:
-                            non_shared_cols = [col for col in uc.columns if col not in shared_cols]
-                            
-                            for col_name in non_shared_cols:
-                                if col_name in fk_map:
-                                    fk = fk_map[col_name]
-                                    parent_node = "{0}.{1}".format(fk.referenced_table_schema, fk.referenced_table_name)
-                                    parent_col = fk.referenced_column_name
-                                    
-                                    if parent_node in self.generated_rows:
-                                        parent_rows = self.generated_rows[parent_node]
-                                        available_vals = list(set([r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]))
-                                        
-                                        # Cycle through values (check for empty list)
-                                        if available_vals:
-                                            row_assignment[col_name] = available_vals[local_idx % len(available_vals)]
-                                        else:
-                                            print("ERROR: {0}: No values available for FK column {1}".format(node, col_name), file=sys.stderr)
-                                else:
-                                    populate_config = self.populate_columns_config.get(node, {})
-                                    col_config = populate_config.get(col_name, {})
-                                    if "values" in col_config:
-                                        available_vals = col_config["values"]
-                                        # Check for empty list
-                                        if available_vals:
-                                            row_assignment[col_name] = available_vals[local_idx % len(available_vals)]
-                                        else:
-                                            print("ERROR: {0}: No values available for column {1}".format(node, col_name), file=sys.stderr)
-                        
-                        all_combinations.append(row_assignment)
+                
+                if shared_values and non_shared_value_lists:
+                    # Get list of non-shared columns and their value lists
+                    non_shared_cols = list(non_shared_value_lists.keys())
+                    value_lists = [non_shared_value_lists[col] for col in non_shared_cols]
+                    
+                    # Check if any value list is empty
+                    if any(not vlist for vlist in value_lists):
+                        print("WARNING: {0}: Some non-shared columns have empty value lists".format(node), file=sys.stderr)
+                    else:
+                        # Generate Cartesian product for each shared value
+                        for shared_val in shared_values:
+                            # Cartesian product of all non-shared column values
+                            for combo in itertools.product(*value_lists):
+                                row_assignment = {primary_shared_col: shared_val}
+                                
+                                # Assign non-shared column values
+                                for col_name, value in zip(non_shared_cols, combo):
+                                    row_assignment[col_name] = value
+                                
+                                # Verify this combination satisfies all constraints
+                                # (all required columns are present)
+                                if all(col in row_assignment for uc in constraint_group for col in uc.columns):
+                                    all_combinations.append(row_assignment)
+                
+                debug_print("{0}: Generated {1} total valid combinations".format(node, len(all_combinations)))
                 
                 # Check if we have enough combinations
                 if len(all_combinations) < len(rows):
