@@ -78,7 +78,7 @@ class TestStratifiedSampling(unittest.TestCase):
         print(f"  APR duplicates: {apr_duplicates} (should be 0)")
     
     def test_stratified_sampling_ensures_balance(self):
-        """Verify that stratified sampling ensures all shared values appear correctly."""
+        """Verify that stratified sampling with smart diversity ensures all shared values appear correctly."""
         import itertools
         
         a_id_values = list(range(1, 3001))  # 3000 A_IDs
@@ -100,7 +100,7 @@ class TestStratifiedSampling(unittest.TestCase):
         
         self.assertEqual(len(all_combinations), 60000)
         
-        # FIXED APPROACH: Stratified sampling
+        # FIXED APPROACH: Smart Stratified sampling with diversity
         primary_shared_col = 'A_ID'
         shared_values = a_id_values
         requested_rows = 6000
@@ -118,18 +118,71 @@ class TestStratifiedSampling(unittest.TestCase):
         self.assertEqual(rows_per_shared_val, 2, "Should be 2 rows per A_ID")
         self.assertEqual(remainder, 0, "Should divide evenly")
         
-        # Select stratified
+        # Select stratified with smart diversity
         random.seed(42)
         selected_combinations = []
         shared_values_list = list(shared_values)
         random.shuffle(shared_values_list)  # Randomize order
         
+        constraint_non_shared_cols = ['PR', 'C_ID']
+        
         for idx, shared_val in enumerate(shared_values_list):
             available = combos_by_shared_val[shared_val]
             num_rows_for_this_val = rows_per_shared_val + (1 if idx < remainder else 0)
             
-            random.shuffle(available)
-            selected = available[:num_rows_for_this_val]
+            # SMART SELECTION: Ensure diversity in all constraint columns
+            selected = []
+            smart_selection_succeeded = False
+            
+            if num_rows_for_this_val > 1 and num_rows_for_this_val <= 10 and len(constraint_non_shared_cols) >= 1:
+                # Try to ensure diversity in the first constraint column
+                first_col = constraint_non_shared_cols[0]
+                by_first_col = defaultdict(list)
+                for combo in available:
+                    by_first_col[combo[first_col]].append(combo)
+                
+                first_col_values = list(by_first_col.keys())
+                
+                # If we have enough distinct values in first column, select one from each
+                if len(first_col_values) >= num_rows_for_this_val:
+                    random.shuffle(first_col_values)
+                    
+                    # Now ensure diversity in other constraint columns too
+                    used_values = defaultdict(set)  # Track used values for each column
+                    
+                    for first_val in first_col_values[:num_rows_for_this_val]:
+                        candidates = by_first_col[first_val]
+                        
+                        # Filter candidates to maximize diversity in other columns
+                        best_candidate = None
+                        for candidate in candidates:
+                            # Check if this candidate adds diversity
+                            conflicts = 0
+                            for col in constraint_non_shared_cols[1:]:
+                                if candidate[col] in used_values[col]:
+                                    conflicts += 1
+                            
+                            if conflicts == 0 or best_candidate is None:
+                                best_candidate = candidate
+                                if conflicts == 0:
+                                    break  # Found a perfect candidate
+                        
+                        if best_candidate is None:
+                            best_candidate = candidates[random.randint(0, len(candidates) - 1)]
+                        
+                        selected.append(best_candidate)
+                        
+                        # Mark values as used
+                        for col in constraint_non_shared_cols:
+                            used_values[col].add(best_candidate[col])
+                    
+                    smart_selection_succeeded = True
+            
+            # If smart selection didn't work, fall back to random selection
+            if not smart_selection_succeeded:
+                random.shuffle(available)
+                selected = available[:num_rows_for_this_val]
+            
             selected_combinations.extend(selected)
         
         # Shuffle final selection
@@ -161,7 +214,7 @@ class TestStratifiedSampling(unittest.TestCase):
             apr_pairs.add(pair)
         
         self.assertEqual(apr_duplicates, 0,
-                        "Stratified sampling should eliminate APR duplicates")
+                        "Smart stratified sampling should eliminate APR duplicates")
         
         # Verify NO duplicates in ACS constraint
         acs_pairs = set()
@@ -173,9 +226,9 @@ class TestStratifiedSampling(unittest.TestCase):
             acs_pairs.add(pair)
         
         self.assertEqual(acs_duplicates, 0,
-                        "Stratified sampling should eliminate ACS duplicates")
+                        "Smart stratified sampling should eliminate ACS duplicates")
         
-        print(f"\nStratified sampling results:")
+        print(f"\nSmart stratified sampling results:")
         print(f"  Unique A_IDs: {unique_a_ids} (target: 3000) ✓")
         print(f"  APR duplicates: {apr_duplicates} (target: 0) ✓")
         print(f"  ACS duplicates: {acs_duplicates} (target: 0) ✓")

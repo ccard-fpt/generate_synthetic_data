@@ -1328,6 +1328,14 @@ class FastSyntheticGenerator:
                     debug_print("{0}: Stratified sampling: {1} rows per shared value, {2} remainder".format(
                         node, rows_per_shared_val, remainder))
                     
+                    # Identify non-shared columns that are part of constraints
+                    # These are the columns we want to ensure diversity in
+                    constraint_non_shared_cols = []
+                    for uc in constraint_group:
+                        for col in uc.columns:
+                            if col not in shared_cols and col not in constraint_non_shared_cols:
+                                constraint_non_shared_cols.append(col)
+                    
                     selected_combinations = []
                     shared_values_list = list(shared_values)
                     self.rng.shuffle(shared_values_list)  # Randomize order of shared values
@@ -1344,9 +1352,60 @@ class FastSyntheticGenerator:
                         # First 'remainder' shared values get one extra row
                         num_rows_for_this_val = rows_per_shared_val + (1 if idx < remainder else 0)
                         
-                        # Shuffle and select
-                        self.rng.shuffle(available)
-                        selected = available[:num_rows_for_this_val]
+                        # SMART SELECTION: Ensure diversity in all constraint columns
+                        # This maximizes uniqueness across all overlapping constraints
+                        selected = []
+                        smart_selection_succeeded = False
+                        
+                        if num_rows_for_this_val > 1 and num_rows_for_this_val <= 10 and len(constraint_non_shared_cols) >= 1:
+                            # Try to ensure diversity in the first constraint column
+                            first_col = constraint_non_shared_cols[0]
+                            by_first_col = defaultdict(list)
+                            for combo in available:
+                                by_first_col[combo[first_col]].append(combo)
+                            
+                            first_col_values = list(by_first_col.keys())
+                            
+                            # If we have enough distinct values in first column, select one from each
+                            if len(first_col_values) >= num_rows_for_this_val:
+                                self.rng.shuffle(first_col_values)
+                                
+                                # Now ensure diversity in other constraint columns too
+                                used_values = defaultdict(set)  # Track used values for each column
+                                
+                                for first_val in first_col_values[:num_rows_for_this_val]:
+                                    candidates = by_first_col[first_val]
+                                    
+                                    # Filter candidates to maximize diversity in other columns
+                                    best_candidate = None
+                                    for candidate in candidates:
+                                        # Check if this candidate adds diversity
+                                        conflicts = 0
+                                        for col in constraint_non_shared_cols[1:]:
+                                            if candidate[col] in used_values[col]:
+                                                conflicts += 1
+                                        
+                                        if conflicts == 0 or best_candidate is None:
+                                            best_candidate = candidate
+                                            if conflicts == 0:
+                                                break  # Found a perfect candidate
+                                    
+                                    if best_candidate is None:
+                                        best_candidate = candidates[self.rng.randint(0, len(candidates) - 1)]
+                                    
+                                    selected.append(best_candidate)
+                                    
+                                    # Mark values as used
+                                    for col in constraint_non_shared_cols:
+                                        used_values[col].add(best_candidate[col])
+                                
+                                smart_selection_succeeded = True
+                        
+                        # If smart selection didn't work, fall back to random selection
+                        if not smart_selection_succeeded:
+                            self.rng.shuffle(available)
+                            selected = available[:num_rows_for_this_val]
+                        
                         selected_combinations.extend(selected)
                         
                         # Safety check
