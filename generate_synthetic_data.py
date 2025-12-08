@@ -1176,9 +1176,9 @@ class FastSyntheticGenerator:
             
             # If we have composite UNIQUE constraints with all controlled columns, use Cartesian product
             if unique_fk_constraints:
-                # If multiple constraints found, choose the one with FEWEST combinations (tightest constraint)
+                # If multiple constraints found, choose the one with fewest combinations (tightest constraint)
                 if len(unique_fk_constraints) > 1:
-                    # Calculate max combinations for each constraint
+                    # Calculate total combinations for each constraint
                     constraint_combos = []
                     
                     for candidate_uc in unique_fk_constraints:

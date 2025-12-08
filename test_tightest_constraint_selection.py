@@ -84,7 +84,7 @@ class TestTightestConstraintSelection(unittest.TestCase):
         """Test that constraint with fewer FK combinations is selected."""
         # Two constraints with FK columns only
         # ACS: A_ID (3000 vals) × C_ID (10 vals) = 30,000 combinations
-        # APR: A_ID (3000 vals) × R_ID (2 vals) = 6,000 combinations
+        # APR: A_ID (3000 vals) × R_ID (2 unique IDs) = 6,000 combinations
         # Should select APR (tighter)
         
         constraints = [
@@ -102,7 +102,7 @@ class TestTightestConstraintSelection(unittest.TestCase):
         generated_rows = {
             "db.A": [{"ID": i} for i in range(1, 3001)],  # 3000 unique IDs
             "db.C": [{"ID": i} for i in range(1, 11)],     # 10 unique IDs
-            "db.R": [{"ID": i} for i in range(1, 3)],      # 2 unique IDs
+            "db.R": [{"ID": i} for i in range(1, 3)],      # 2 unique IDs (1-2)
         }
         
         populate_config = {}
