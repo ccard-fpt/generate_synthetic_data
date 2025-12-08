@@ -1310,6 +1310,7 @@ class FastSyntheticGenerator:
                     for i in range(len(rows)):
                         extended_combinations.append(all_combinations[i % len(all_combinations)])
                     all_combinations = extended_combinations
+                    # Use all extended combinations directly (no stratification needed when repeating)
                     selected_combinations = all_combinations
                 else:
                     # Use STRATIFIED sampling to ensure balanced distribution across shared values

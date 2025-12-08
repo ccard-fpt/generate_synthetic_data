@@ -168,7 +168,7 @@ class TestStratifiedSampling(unittest.TestCase):
                                     break  # Found a perfect candidate
                         
                         if best_candidate is None:
-                            best_candidate = candidates[random.randint(0, len(candidates) - 1)]
+                            best_candidate = random.choice(candidates)
                         
                         selected.append(best_candidate)
                         

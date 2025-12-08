@@ -139,7 +139,7 @@ def simulate_multi_constraint_cartesian():
                                 break  # Found a perfect candidate
                     
                     if best_candidate is None:
-                        best_candidate = candidates[random.randint(0, len(candidates) - 1)]
+                        best_candidate = random.choice(candidates)
                     
                     selected_for_this_val.append(best_candidate)
                     
