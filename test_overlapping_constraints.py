@@ -169,99 +169,133 @@ class TestOverlappingConstraintDetection(unittest.TestCase):
 class TestMultiConstraintCombinationGeneration(unittest.TestCase):
     """Test generation logic for multi-constraint Cartesian product."""
     
-    def test_rows_per_shared_combo_calculation(self):
-        """Test calculating rows needed per shared value."""
+    def test_cartesian_product_combinations_count(self):
+        """Test that Cartesian product generates correct number of combinations."""
+        import itertools
+        
         # Scenario: A_ID shared, PR has 2 values, C_ID has 10 values
-        # Should need max(2, 10) = 10 rows per A_ID
+        # With Cartesian product: 2 * 10 = 20 combinations per A_ID
         
-        # For APR: non-shared is PR with 2 values
-        # For ACS: non-shared is C_ID with 10 values
+        shared_values = [1, 2, 3]  # 3 A_ID values
+        pr_values = [0, 1]  # 2 PR values
+        c_id_values = list(range(1, 11))  # 10 C_ID values
         
-        rows_per_shared_combo = 1
+        # Build non-shared value lists
+        non_shared_value_lists = {
+            'PR': pr_values,
+            'C_ID': c_id_values,
+        }
         
-        # APR constraint, PR column
-        pr_values = [0, 1]
-        rows_per_shared_combo = max(rows_per_shared_combo, len(pr_values))
+        all_combinations = []
+        non_shared_cols = list(non_shared_value_lists.keys())
+        value_lists = [non_shared_value_lists[col] for col in non_shared_cols]
         
-        # ACS constraint, C_ID column
-        c_id_count = 10
-        rows_per_shared_combo = max(rows_per_shared_combo, c_id_count)
+        for a_id in shared_values:
+            for combo in itertools.product(*value_lists):
+                row_assignment = {'A_ID': a_id}
+                for col_name, value in zip(non_shared_cols, combo):
+                    row_assignment[col_name] = value
+                all_combinations.append(row_assignment)
         
-        # Should be 10
-        self.assertEqual(rows_per_shared_combo, 10)
+        # Should generate 3 * (2 * 10) = 60 combinations
+        expected = len(shared_values) * len(pr_values) * len(c_id_values)
+        self.assertEqual(len(all_combinations), expected)
+        self.assertEqual(len(all_combinations), 60)
     
     def test_combination_assignment_structure(self):
-        """Test that row assignments have correct structure."""
+        """Test that row assignments have correct structure using Cartesian product."""
+        import itertools
+        
         # Simulate generating combinations for shared A_ID values
         shared_values = [1, 2, 3]  # 3 A_ID values
-        rows_per_shared_combo = 2  # Need 2 rows per A_ID (for PR=0 and PR=1)
-        
         pr_values = [0, 1]
         c_id_values = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
         
+        # Use Cartesian product approach
+        non_shared_value_lists = {
+            'PR': pr_values,
+            'C_ID': c_id_values,
+        }
+        
         all_combinations = []
+        non_shared_cols = list(non_shared_value_lists.keys())
+        value_lists = [non_shared_value_lists[col] for col in non_shared_cols]
+        
         for shared_val in shared_values:
-            for local_idx in range(rows_per_shared_combo):
+            for combo in itertools.product(*value_lists):
                 row_assignment = {"A_ID": shared_val}
-                
-                # Assign PR (cycles through 0, 1)
-                row_assignment["PR"] = pr_values[local_idx % len(pr_values)]
-                
-                # Assign C_ID (cycles through available values)
-                row_assignment["C_ID"] = c_id_values[local_idx % len(c_id_values)]
-                
+                for col_name, value in zip(non_shared_cols, combo):
+                    row_assignment[col_name] = value
                 all_combinations.append(row_assignment)
         
-        # Should generate 3 * 2 = 6 combinations
-        self.assertEqual(len(all_combinations), 6)
+        # Should generate 3 * (2 * 10) = 60 combinations
+        self.assertEqual(len(all_combinations), 60)
         
-        # Verify uniqueness of (A_ID, PR) pairs
-        apr_pairs = set((r["A_ID"], r["PR"]) for r in all_combinations)
-        self.assertEqual(len(apr_pairs), 6)  # All should be unique
+        # Verify all 3-tuples are unique
+        all_tuples = set((r["A_ID"], r["PR"], r["C_ID"]) for r in all_combinations)
+        self.assertEqual(len(all_tuples), 60)  # All 3-tuples should be unique
         
-        # Verify uniqueness of (A_ID, C_ID) pairs
-        acs_pairs = set((r["A_ID"], r["C_ID"]) for r in all_combinations)
-        self.assertEqual(len(acs_pairs), 6)  # All should be unique
+        # Verify uniqueness of (A_ID, PR) pairs - each A_ID has each PR exactly 10 times
+        apr_pairs = [(r["A_ID"], r["PR"]) for r in all_combinations]
+        # 3 A_IDs * 2 PR values = 6 unique pairs, but each appears 10 times (once per C_ID)
+        unique_apr_pairs = set(apr_pairs)
+        self.assertEqual(len(unique_apr_pairs), 6)  
+        
+        # Verify uniqueness of (A_ID, C_ID) pairs - each A_ID has each C_ID exactly 2 times
+        acs_pairs = [(r["A_ID"], r["C_ID"]) for r in all_combinations]
+        # 3 A_IDs * 10 C_ID values = 30 unique pairs, but each appears 2 times (once per PR)
+        unique_acs_pairs = set(acs_pairs)
+        self.assertEqual(len(unique_acs_pairs), 30)
     
     def test_insufficient_combinations_repeats(self):
         """Test handling when not enough unique combinations exist."""
-        # Scenario: Only 2 A_ID values, need 2 rows per A_ID = 4 total combos
-        # But requesting 10 rows - should repeat combinations
+        import itertools
+        
+        # Scenario: Only 2 A_ID values, 2 PR values, 2 C_ID values
+        # Cartesian product: 2 * (2 * 2) = 8 total unique combinations
+        # But requesting 20 rows - should repeat combinations
         
         shared_values = [1, 2]  # 2 A_ID values
-        rows_per_shared_combo = 2
-        requested_rows = 10
+        requested_rows = 20
         
         pr_values = [0, 1]
         c_id_values = [10, 20]
         
-        # Generate all combinations
+        # Generate all combinations using Cartesian product
+        non_shared_value_lists = {
+            'PR': pr_values,
+            'C_ID': c_id_values,
+        }
+        
         all_combinations = []
+        non_shared_cols = list(non_shared_value_lists.keys())
+        value_lists = [non_shared_value_lists[col] for col in non_shared_cols]
+        
         for shared_val in shared_values:
-            for local_idx in range(rows_per_shared_combo):
+            for combo in itertools.product(*value_lists):
                 row_assignment = {"A_ID": shared_val}
-                row_assignment["PR"] = pr_values[local_idx % len(pr_values)]
-                row_assignment["C_ID"] = c_id_values[local_idx % len(c_id_values)]
+                for col_name, value in zip(non_shared_cols, combo):
+                    row_assignment[col_name] = value
                 all_combinations.append(row_assignment)
         
-        # Only 4 unique combinations
-        self.assertEqual(len(all_combinations), 4)
+        # Should have 8 unique combinations (2 * 2 * 2)
+        self.assertEqual(len(all_combinations), 8)
         
-        # Extend to 10 by repeating
+        # Extend to 20 by repeating
         if len(all_combinations) < requested_rows:
             extended_combinations = []
             for i in range(requested_rows):
                 extended_combinations.append(all_combinations[i % len(all_combinations)])
             all_combinations = extended_combinations
         
-        # Should now have 10 rows
-        self.assertEqual(len(all_combinations), 10)
+        # Should now have 20 rows
+        self.assertEqual(len(all_combinations), 20)
         
-        # But only 4 unique combinations
+        # But only 8 unique combinations
         unique_combos = set()
         for r in all_combinations:
             unique_combos.add((r["A_ID"], r["PR"], r["C_ID"]))
-        self.assertEqual(len(unique_combos), 4)
+        self.assertEqual(len(unique_combos), 8)
 
 
 if __name__ == "__main__":
