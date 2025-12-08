@@ -1174,8 +1174,128 @@ class FastSyntheticGenerator:
                 if all_controlled:
                     unique_fk_constraints.append(uc)
             
+            # Check for overlapping UNIQUE constraints (share columns)
+            overlapping_constraint_groups = []
+            if len(unique_fk_constraints) > 1:
+                # Find constraints that share columns
+                for i, uc1 in enumerate(unique_fk_constraints):
+                    group = set([uc1])
+                    for j, uc2 in enumerate(unique_fk_constraints):
+                        if i != j and set(uc1.columns) & set(uc2.columns):
+                            group.add(uc2)
+                    
+                    if len(group) > 1:
+                        overlapping_constraint_groups.append(list(group))
+                
+                # Deduplicate groups
+                unique_groups = []
+                for group in overlapping_constraint_groups:
+                    group_set = frozenset(uc.constraint_name for uc in group)
+                    if not any(group_set == frozenset(uc.constraint_name for uc in g) for g in unique_groups):
+                        unique_groups.append(group)
+                overlapping_constraint_groups = unique_groups
+            
+            # If we have overlapping constraints, use multi-constraint Cartesian product
+            if overlapping_constraint_groups:
+                # Use the first overlapping group
+                constraint_group = overlapping_constraint_groups[0]
+                
+                debug_print("{0}: Found overlapping UNIQUE constraints: {1}".format(
+                    node, [uc.constraint_name for uc in constraint_group]))
+                
+                # Find shared columns
+                shared_cols = set(constraint_group[0].columns)
+                for uc in constraint_group[1:]:
+                    shared_cols &= set(uc.columns)
+                
+                debug_print("{0}: Shared columns: {1}".format(node, list(shared_cols)))
+                
+                # Determine rows needed per shared value combination
+                # This is the LCM or max of unique values in non-shared columns
+                rows_per_shared_combo = 1
+                
+                for uc in constraint_group:
+                    non_shared_cols = [col for col in uc.columns if col not in shared_cols]
+                    
+                    # Count unique values for non-shared columns
+                    for col_name in non_shared_cols:
+                        if col_name in fk_map:
+                            fk = fk_map[col_name]
+                            parent_node = "{0}.{1}".format(fk.referenced_table_schema, fk.referenced_table_name)
+                            parent_col = fk.referenced_column_name
+                            
+                            if parent_node in self.generated_rows:
+                                parent_rows = self.generated_rows[parent_node]
+                                parent_vals = [r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]
+                                unique_count = len(set(parent_vals))
+                                rows_per_shared_combo = max(rows_per_shared_combo, unique_count)
+                        else:
+                            populate_config = self.populate_columns_config.get(node, {})
+                            col_config = populate_config.get(col_name, {})
+                            if "values" in col_config:
+                                rows_per_shared_combo = max(rows_per_shared_combo, len(col_config["values"]))
+                
+                debug_print("{0}: Rows per shared value combination: {1}".format(node, rows_per_shared_combo))
+                
+                # Load values for shared columns
+                primary_shared_col = list(shared_cols)[0]
+                shared_values = []
+                if primary_shared_col in fk_map:
+                    fk = fk_map[primary_shared_col]
+                    parent_node = "{0}.{1}".format(fk.referenced_table_schema, fk.referenced_table_name)
+                    parent_col = fk.referenced_column_name
+                    
+                    if parent_node in self.generated_rows:
+                        parent_rows = self.generated_rows[parent_node]
+                        shared_values = list(set([r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]))
+                
+                # Generate row assignments
+                all_combinations = []
+                for shared_val in shared_values:
+                    for local_idx in range(rows_per_shared_combo):
+                        row_assignment = {primary_shared_col: shared_val}
+                        
+                        # Assign values for each constraint's non-shared columns
+                        for uc in constraint_group:
+                            non_shared_cols = [col for col in uc.columns if col not in shared_cols]
+                            
+                            for col_name in non_shared_cols:
+                                if col_name in fk_map:
+                                    fk = fk_map[col_name]
+                                    parent_node = "{0}.{1}".format(fk.referenced_table_schema, fk.referenced_table_name)
+                                    parent_col = fk.referenced_column_name
+                                    
+                                    if parent_node in self.generated_rows:
+                                        parent_rows = self.generated_rows[parent_node]
+                                        available_vals = list(set([r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]))
+                                        
+                                        # Cycle through values
+                                        row_assignment[col_name] = available_vals[local_idx % len(available_vals)]
+                                else:
+                                    populate_config = self.populate_columns_config.get(node, {})
+                                    col_config = populate_config.get(col_name, {})
+                                    if "values" in col_config:
+                                        available_vals = col_config["values"]
+                                        row_assignment[col_name] = available_vals[local_idx % len(available_vals)]
+                        
+                        all_combinations.append(row_assignment)
+                
+                # Shuffle and take needed rows
+                self.rng.shuffle(all_combinations)
+                selected_combinations = all_combinations[:len(rows)]
+                
+                # Store in pre_allocated_unique_fk_tuples
+                for row_idx, combination in enumerate(selected_combinations):
+                    for col_name, value in combination.items():
+                        if col_name not in pre_allocated_unique_fk_tuples:
+                            pre_allocated_unique_fk_tuples[col_name] = {}
+                        pre_allocated_unique_fk_tuples[col_name][row_idx] = value
+                
+                debug_print("{0}: Pre-allocated {1} rows satisfying {2} constraints".format(
+                    node, len(selected_combinations), len(constraint_group)))
+            
             # If we have composite UNIQUE constraints with all controlled columns, use Cartesian product
-            if unique_fk_constraints:
+            elif unique_fk_constraints:
                 # If multiple constraints found, choose the one with fewest combinations (tightest constraint)
                 if len(unique_fk_constraints) > 1:
                     # Calculate total combinations for each constraint
