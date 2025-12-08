@@ -1310,10 +1310,55 @@ class FastSyntheticGenerator:
                     for i in range(len(rows)):
                         extended_combinations.append(all_combinations[i % len(all_combinations)])
                     all_combinations = extended_combinations
-                
-                # Shuffle and take needed rows
-                self.rng.shuffle(all_combinations)
-                selected_combinations = all_combinations[:len(rows)]
+                    selected_combinations = all_combinations
+                else:
+                    # Use STRATIFIED sampling to ensure balanced distribution across shared values
+                    # This guarantees all shared values (e.g., A_IDs) appear the correct number of times
+                    
+                    # Group combinations by shared value (e.g., A_ID)
+                    combos_by_shared_val = defaultdict(list)
+                    for combo in all_combinations:
+                        shared_val = combo[primary_shared_col]
+                        combos_by_shared_val[shared_val].append(combo)
+                    
+                    # Calculate how many rows each shared value should get
+                    rows_per_shared_val = len(rows) // len(shared_values)
+                    remainder = len(rows) % len(shared_values)
+                    
+                    debug_print("{0}: Stratified sampling: {1} rows per shared value, {2} remainder".format(
+                        node, rows_per_shared_val, remainder))
+                    
+                    selected_combinations = []
+                    shared_values_list = list(shared_values)
+                    self.rng.shuffle(shared_values_list)  # Randomize order of shared values
+                    
+                    for idx, shared_val in enumerate(shared_values_list):
+                        available = combos_by_shared_val[shared_val]
+                        
+                        if not available:
+                            print("WARNING: {0}: No combinations available for shared value {1}={2}".format(
+                                node, primary_shared_col, shared_val), file=sys.stderr)
+                            continue
+                        
+                        # Determine how many rows this shared value should get
+                        # First 'remainder' shared values get one extra row
+                        num_rows_for_this_val = rows_per_shared_val + (1 if idx < remainder else 0)
+                        
+                        # Shuffle and select
+                        self.rng.shuffle(available)
+                        selected = available[:num_rows_for_this_val]
+                        selected_combinations.extend(selected)
+                        
+                        # Safety check
+                        if len(selected) < num_rows_for_this_val:
+                            print("WARNING: {0}: Shared value {1}={2} only has {3} combinations but needs {4}".format(
+                                node, primary_shared_col, shared_val, len(available), num_rows_for_this_val), file=sys.stderr)
+                    
+                    # Shuffle final selection for randomness
+                    self.rng.shuffle(selected_combinations)
+                    
+                    debug_print("{0}: Stratified sampling selected {1} combinations from {2} shared values".format(
+                        node, len(selected_combinations), len(shared_values)))
                 
                 # Store in pre_allocated_unique_fk_tuples
                 for row_idx, combination in enumerate(selected_combinations):

@@ -70,10 +70,40 @@ def simulate_multi_constraint_cartesian():
     print(f"  Generated {len(all_combinations):,} total valid combinations")
     print(f"  (3,000 A_IDs × 2 PR values × 10 C_ID values = {3000 * 2 * 10:,})")
     
-    # Shuffle and select 6000
+    # Use stratified sampling instead of random shuffle
+    from collections import defaultdict
+    
+    primary_shared_col = 'A_ID'
+    shared_values = a_id_values
+    requested_rows = 6000
+    
+    # Group combinations by shared value (A_ID)
+    combos_by_shared_val = defaultdict(list)
+    for combo in all_combinations:
+        shared_val = combo[primary_shared_col]
+        combos_by_shared_val[shared_val].append(combo)
+    
+    # Calculate rows per shared value
+    rows_per_shared_val = requested_rows // len(shared_values)
+    remainder = requested_rows % len(shared_values)
+    
+    print(f"  Using stratified sampling: {rows_per_shared_val} rows per shared value, {remainder} remainder")
+    
     random.seed(42)
-    random.shuffle(all_combinations)
-    selected = all_combinations[:6000]
+    selected = []
+    shared_values_list = list(shared_values)
+    random.shuffle(shared_values_list)  # Randomize order
+    
+    for idx, shared_val in enumerate(shared_values_list):
+        available = combos_by_shared_val[shared_val]
+        num_rows_for_this_val = rows_per_shared_val + (1 if idx < remainder else 0)
+        
+        random.shuffle(available)
+        selected_for_this_val = available[:num_rows_for_this_val]
+        selected.extend(selected_for_this_val)
+    
+    # Shuffle final selection
+    random.shuffle(selected)
     
     print(f"  Selected {len(selected):,} rows for table AC")
     
