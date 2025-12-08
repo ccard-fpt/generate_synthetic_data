@@ -32,6 +32,8 @@ class TestTightestConstraintSelection(unittest.TestCase):
         """Helper method to calculate combination count for a constraint.
         
         This mirrors the logic in generate_synthetic_data.py lines 1184-1218.
+        The duplication is intentional - tests should independently validate behavior
+        without depending on the implementation being tested.
         
         Args:
             constraint: UniqueConstraint object

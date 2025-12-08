@@ -1197,7 +1197,7 @@ class FastSyntheticGenerator:
                                     unique_vals = len(set(parent_vals))
                                     combo_count *= unique_vals
                                 else:
-                                    # Parent not generated yet - can't calculate, skip this constraint
+                                    # Parent not generated yet - can't calculate, mark as unknown (infinity)
                                     combo_count = float('inf')
                                     break
                             else:
@@ -1238,8 +1238,14 @@ class FastSyntheticGenerator:
                     # Warn about other constraints
                     other_constraints = [c.constraint_name for c, _ in constraint_combos if c != uc]
                     if other_constraints:
-                        print("WARNING: {0}: Multiple UNIQUE constraints detected. Using Cartesian product for {1} ({2} combinations). Other constraints ({3}) may have duplicates.".format(
-                            node, uc.constraint_name, min_combos if min_combos != float('inf') else 'unknown', ', '.join(other_constraints)), file=sys.stderr)
+                        combos_str = min_combos if min_combos != float('inf') else 'unknown'
+                        print(
+                            "WARNING: {0}: Multiple UNIQUE constraints detected. Using Cartesian product for {1} "
+                            "({2} combinations). Other constraints ({3}) may have duplicates.".format(
+                                node, uc.constraint_name, combos_str, ', '.join(other_constraints)
+                            ),
+                            file=sys.stderr
+                        )
                 else:
                     # Only one constraint - use it
                     uc = unique_fk_constraints[0]
