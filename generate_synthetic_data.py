@@ -1141,7 +1141,7 @@ class FastSyntheticGenerator:
         # (only if PK didn't already use Cartesian product)
         pre_allocated_unique_fk_tuples = {}
         
-        if not pk_fk_columns and tmeta.unique_constraints:
+        if not pk_fk_columns and unique_constraints:
             unique_fk_constraints = []
             fk_map = {}
             
@@ -1150,7 +1150,7 @@ class FastSyntheticGenerator:
                 if "{0}.{1}".format(fk.table_schema, fk.table_name) == node:
                     fk_map[fk.column_name] = fk
             
-            for uc in tmeta.unique_constraints:
+            for uc in unique_constraints:
                 # Skip single-column UNIQUE (already handled by unique value pools)
                 if len(uc.columns) < 2:
                     continue
