@@ -1326,10 +1326,6 @@ Enable verbose logging to understand generation process:
 [DEBUG] db.AC: Conditional FK fk_posts matched (condition: commentable_type = 'Post'), assigned commentable_id=42
 ```
 
-## License
-
-[Add license information]
-
 ## Contributing
 
 Contributions are welcome! Please follow these guidelines:
