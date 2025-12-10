@@ -76,7 +76,7 @@ class TestDiscriminatorDetection(unittest.TestCase):
         # Simulate ENUM column type: enum('WD','H','MC')
         column_type = "enum('WD','H','MC')"
         
-        # Parse enum values (same regex used in generate_synthetic_data.py line 606)
+        # Parse enum values (same regex used in generate_synthetic_data.py line 629)
         m = re.findall(r"'((?:[^']|(?:''))*)'", column_type)
         vals = [v.replace("''", "'") for v in m]
         

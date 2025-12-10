@@ -452,8 +452,8 @@ class FastSyntheticGenerator:
                 is_fk = col_name in fk_cols
                 is_pk = col_name in tmeta.pk_columns
                 
-                # NEW: Discriminator columns with ENUM type are controlled
-                # (they'll get enum values from schema automatically)
+                # NEW: Discriminator columns with ENUM type in UNIQUE constraints are controlled
+                # (they'll get enum values from schema automatically, not sequential generation)
                 if col_name in discriminator_cols:
                     col_meta = next((c for c in tmeta.columns if c.name == col_name), None)
                     if col_meta and col_meta.data_type and col_meta.data_type.lower() == "enum":
