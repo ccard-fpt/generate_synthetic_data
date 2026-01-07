@@ -1,641 +1,511 @@
-#!/usr/bin/env python3
-"""Utility functions and data structures for synthetic data generation"""
-import hashlib, hmac, re, random, sys
+import re
+import random
+import string
 from datetime import datetime, timedelta
 from collections import namedtuple
+from generate_synthetic_data_patterns import CompiledPatterns
 
-GLOBALS = {"debug": False}
+# Named tuple for column metadata
+ColumnMetadata = namedtuple('ColumnMetadata', ['name', 'data_type', 'column_type', 'is_nullable'])
 
-# Maximum attempt multiplier for generating unique values (used in generate_unique_value_pool)
-UNIQUE_VALUE_MAX_ATTEMPTS_MULTIPLIER = 10
-
-
-def parse_date(date_str):
+class SyntheticDataGenerator:
     """
-    Parse date string in various formats.
-    Supports: YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, ISO format
+    A utility class for generating synthetic data based on column metadata.
+    """
     
-    Returns: datetime object or None if parsing fails
+    def __init__(self, seed=None):
+        """
+        Initialize the synthetic data generator.
+        
+        Args:
+            seed (int, optional): Random seed for reproducibility
+        """
+        if seed is not None:
+            random.seed(seed)
+    
+    @staticmethod
+    def generate_string(length=10, nullable=False, null_probability=0.1):
+        """
+        Generate a random string.
+        
+        Args:
+            length (int): Length of the string
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            
+        Returns:
+            str or None: Generated string or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+    
+    @staticmethod
+    def generate_integer(min_val=0, max_val=1000, nullable=False, null_probability=0.1):
+        """
+        Generate a random integer.
+        
+        Args:
+            min_val (int): Minimum value
+            max_val (int): Maximum value
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            
+        Returns:
+            int or None: Generated integer or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        return random.randint(min_val, max_val)
+    
+    @staticmethod
+    def generate_float(min_val=0.0, max_val=1000.0, nullable=False, null_probability=0.1, precision=2):
+        """
+        Generate a random float.
+        
+        Args:
+            min_val (float): Minimum value
+            max_val (float): Maximum value
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            precision (int): Number of decimal places
+            
+        Returns:
+            float or None: Generated float or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        value = random.uniform(min_val, max_val)
+        return round(value, precision)
+    
+    @staticmethod
+    def generate_boolean(nullable=False, null_probability=0.1):
+        """
+        Generate a random boolean.
+        
+        Args:
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            
+        Returns:
+            bool or None: Generated boolean or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        return random.choice([True, False])
+    
+    @staticmethod
+    def generate_date(start_date=None, end_date=None, nullable=False, null_probability=0.1):
+        """
+        Generate a random date.
+        
+        Args:
+            start_date (datetime): Start date range
+            end_date (datetime): End date range
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            
+        Returns:
+            datetime or None: Generated date or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        
+        if start_date is None:
+            start_date = datetime(2000, 1, 1)
+        if end_date is None:
+            end_date = datetime.now()
+        
+        time_between = end_date - start_date
+        days_between = time_between.days
+        random_days = random.randint(0, days_between)
+        
+        return start_date + timedelta(days=random_days)
+    
+    @staticmethod
+    def generate_email(domain="example.com", nullable=False, null_probability=0.1):
+        """
+        Generate a random email address.
+        
+        Args:
+            domain (str): Email domain
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            
+        Returns:
+            str or None: Generated email or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        
+        username_length = random.randint(5, 15)
+        username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=username_length))
+        return f"{username}@{domain}"
+    
+    @staticmethod
+    def generate_phone(format_pattern="###-###-####", nullable=False, null_probability=0.1):
+        """
+        Generate a random phone number.
+        
+        Args:
+            format_pattern (str): Phone number format (# replaced with digit)
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            
+        Returns:
+            str or None: Generated phone number or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        
+        phone = ""
+        for char in format_pattern:
+            if char == '#':
+                phone += str(random.randint(0, 9))
+            else:
+                phone += char
+        return phone
+    
+    def generate_for_column(self, col):
+        """
+        Generate synthetic data based on column metadata.
+        
+        Args:
+            col (ColumnMetadata): Column metadata
+            
+        Returns:
+            Generated value appropriate for the column type
+        """
+        nullable = col.is_nullable
+        
+        # Check for age-related columns
+        if CompiledPatterns.AGE_PATTERN.search(col.name):
+            return self.generate_integer(min_val=18, max_val=100, nullable=nullable)
+        
+        # Check for email columns
+        if re.search(r"email", col.name, re.I):
+            return self.generate_email(nullable=nullable)
+        
+        # Check for phone columns
+        if re.search(r"phone|tel", col.name, re.I):
+            return self.generate_phone(nullable=nullable)
+        
+        # Check for date columns
+        if re.search(r"date|time", col.name, re.I) or col.data_type in ['date', 'datetime', 'timestamp']:
+            return self.generate_date(nullable=nullable)
+        
+        # Generate based on data type
+        if col.data_type in ['int', 'integer', 'bigint', 'smallint']:
+            return self.generate_integer(nullable=nullable)
+        elif col.data_type in ['float', 'double', 'decimal', 'numeric']:
+            return self.generate_float(nullable=nullable)
+        elif col.data_type in ['bool', 'boolean']:
+            return self.generate_boolean(nullable=nullable)
+        elif col.data_type in ['varchar', 'char', 'text', 'string']:
+            return self.generate_string(nullable=nullable)
+        else:
+            return self.generate_string(nullable=nullable)
+    
+    def generate_dataset(self, columns, num_rows=100):
+        """
+        Generate a complete synthetic dataset.
+        
+        Args:
+            columns (list): List of ColumnMetadata objects
+            num_rows (int): Number of rows to generate
+            
+        Returns:
+            list: List of dictionaries representing rows
+        """
+        dataset = []
+        for _ in range(num_rows):
+            row = {}
+            for col in columns:
+                row[col.name] = self.generate_for_column(col)
+            dataset.append(row)
+        return dataset
+
+
+class EnumDataGenerator:
     """
-    if not date_str:
-        return None
-    formats = [
-        "%Y-%m-%d",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S"
+    Specialized generator for enum-type columns.
+    """
+    
+    @staticmethod
+    def extract_enum_values(column_type):
+        """
+        Extract enum values from column type definition.
+        
+        Args:
+            column_type (str): Column type string (e.g., "enum('value1','value2')")
+            
+        Returns:
+            list: List of enum values
+        """
+        if not column_type:
+            return []
+        
+        m = CompiledPatterns.ENUM_PATTERN.findall(col.column_type or "")
+        return [v.replace("''", "'") for v in m]
+    
+    @staticmethod
+    def generate_enum_value(column_type, nullable=False, null_probability=0.1):
+        """
+        Generate a value from an enum column type.
+        
+        Args:
+            column_type (str): Column type string
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            
+        Returns:
+            str or None: Random enum value or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        
+        m = CompiledPatterns.ENUM_PATTERN.findall(col.column_type or "")
+        values = [v.replace("''", "'") for v in m]
+        
+        if not values:
+            return None
+        
+        return random.choice(values)
+
+
+class SetDataGenerator:
+    """
+    Specialized generator for set-type columns.
+    """
+    
+    @staticmethod
+    def extract_set_values(set_definition):
+        """
+        Extract set values from set type definition.
+        
+        Args:
+            set_definition (str): Set type string (e.g., "set('value1','value2')")
+            
+        Returns:
+            list: List of set values
+        """
+        if not set_definition:
+            return []
+        
+        # Match single-quoted strings, handling escaped quotes
+        pattern = r"'((?:[^']|(?:''))*)'"
+        matches = re.findall(pattern, set_definition)
+        return [m.replace("''", "'") for m in matches]
+    
+    @staticmethod
+    def generate_set_value(set_definition, nullable=False, null_probability=0.1, 
+                          min_values=1, max_values=None):
+        """
+        Generate a value from a set column type.
+        
+        Args:
+            set_definition (str): Set type string
+            nullable (bool): Whether the value can be null
+            null_probability (float): Probability of generating null
+            min_values (int): Minimum number of values to select
+            max_values (int): Maximum number of values to select
+            
+        Returns:
+            str or None: Comma-separated set values or None
+        """
+        if nullable and random.random() < null_probability:
+            return None
+        
+        values = SetDataGenerator.extract_set_values(set_definition)
+        
+        if not values:
+            return None
+        
+        if max_values is None:
+            max_values = len(values)
+        
+        max_values = min(max_values, len(values))
+        min_values = min(min_values, max_values)
+        
+        num_values = random.randint(min_values, max_values)
+        selected = random.sample(values, num_values)
+        
+        return ','.join(selected)
+
+
+class NameDataGenerator:
+    """
+    Specialized generator for name-related columns.
+    """
+    
+    FIRST_NAMES = [
+        'James', 'Mary', 'John', 'Patricia', 'Robert', 'Jennifer', 'Michael', 'Linda',
+        'William', 'Barbara', 'David', 'Elizabeth', 'Richard', 'Susan', 'Joseph', 'Jessica',
+        'Thomas', 'Sarah', 'Charles', 'Karen', 'Christopher', 'Nancy', 'Daniel', 'Lisa',
+        'Matthew', 'Betty', 'Anthony', 'Margaret', 'Mark', 'Sandra', 'Donald', 'Ashley',
+        'Steven', 'Kimberly', 'Paul', 'Emily', 'Andrew', 'Donna', 'Joshua', 'Michelle'
     ]
-    for fmt in formats:
-        try:
-            return datetime.strptime(date_str, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def parse_populate_columns_config(table_cfg):
-    """
-    Parse populate_columns configuration supporting both formats:
-    - String: "column_name" (backward compatible)
-    - Object: {"column": "name", "min": X, "max": Y} or {"column": "name", "values": [...]}
     
-    Returns: dict mapping column_name -> config_object
-    """
-    populate_cols = {}
-    for item in table_cfg.get("populate_columns", []):
-        if isinstance(item, str):
-            # Backward compatible: simple column name
-            populate_cols[item] = {"column": item}
-        elif isinstance(item, dict):
-            # Extended format
-            col_name = item.get("column")
-            if col_name:
-                populate_cols[col_name] = item
-            else:
-                print("WARNING: populate_columns entry missing 'column' field: {0}".format(item), file=sys.stderr)
-    return populate_cols
+    LAST_NAMES = [
+        'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis',
+        'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez', 'Wilson', 'Anderson',
+        'Thomas', 'Taylor', 'Moore', 'Jackson', 'Martin', 'Lee', 'Perez', 'Thompson',
+        'White', 'Harris', 'Sanchez', 'Clark', 'Ramirez', 'Lewis', 'Robinson', 'Walker',
+        'Young', 'Allen', 'King', 'Wright', 'Scott', 'Torres', 'Nguyen', 'Hill', 'Flores'
+    ]
+    
+    @staticmethod
+    def generate_first_name(nullable=False, null_probability=0.1):
+        """Generate a random first name."""
+        if nullable and random.random() < null_probability:
+            return None
+        return random.choice(NameDataGenerator.FIRST_NAMES)
+    
+    @staticmethod
+    def generate_last_name(nullable=False, null_probability=0.1):
+        """Generate a random last name."""
+        if nullable and random.random() < null_probability:
+            return None
+        return random.choice(NameDataGenerator.LAST_NAMES)
+    
+    @staticmethod
+    def generate_full_name(nullable=False, null_probability=0.1):
+        """Generate a random full name."""
+        if nullable and random.random() < null_probability:
+            return None
+        first = random.choice(NameDataGenerator.FIRST_NAMES)
+        last = random.choice(NameDataGenerator.LAST_NAMES)
+        return f"{first} {last}"
 
 
-def validate_populate_column_config(col_meta, config):
+class AddressDataGenerator:
     """
-    Validate that the configuration is appropriate for the column type.
+    Specialized generator for address-related columns.
+    """
+    
+    STREET_NAMES = [
+        'Main', 'Oak', 'Pine', 'Maple', 'Cedar', 'Elm', 'Washington', 'Lake',
+        'Hill', 'Park', 'First', 'Second', 'Third', 'Fourth', 'Fifth'
+    ]
+    
+    STREET_TYPES = ['St', 'Ave', 'Blvd', 'Dr', 'Ln', 'Rd', 'Way', 'Ct']
+    
+    CITIES = [
+        'New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia',
+        'San Antonio', 'San Diego', 'Dallas', 'San Jose', 'Austin', 'Jacksonville',
+        'Fort Worth', 'Columbus', 'San Francisco', 'Charlotte', 'Indianapolis',
+        'Seattle', 'Denver', 'Washington'
+    ]
+    
+    STATES = [
+        'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+        'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+        'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+        'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'
+    ]
+    
+    @staticmethod
+    def generate_street_address(nullable=False, null_probability=0.1):
+        """Generate a random street address."""
+        if nullable and random.random() < null_probability:
+            return None
+        number = random.randint(1, 9999)
+        street = random.choice(AddressDataGenerator.STREET_NAMES)
+        street_type = random.choice(AddressDataGenerator.STREET_TYPES)
+        return f"{number} {street} {street_type}"
+    
+    @staticmethod
+    def generate_city(nullable=False, null_probability=0.1):
+        """Generate a random city name."""
+        if nullable and random.random() < null_probability:
+            return None
+        return random.choice(AddressDataGenerator.CITIES)
+    
+    @staticmethod
+    def generate_state(nullable=False, null_probability=0.1):
+        """Generate a random state code."""
+        if nullable and random.random() < null_probability:
+            return None
+        return random.choice(AddressDataGenerator.STATES)
+    
+    @staticmethod
+    def generate_zip_code(nullable=False, null_probability=0.1):
+        """Generate a random ZIP code."""
+        if nullable and random.random() < null_probability:
+            return None
+        return f"{random.randint(10000, 99999)}"
+    
+    @staticmethod
+    def generate_full_address(nullable=False, null_probability=0.1):
+        """Generate a complete random address."""
+        if nullable and random.random() < null_probability:
+            return None
+        street = AddressDataGenerator.generate_street_address()
+        city = AddressDataGenerator.generate_city()
+        state = AddressDataGenerator.generate_state()
+        zip_code = AddressDataGenerator.generate_zip_code()
+        return f"{street}, {city}, {state} {zip_code}"
+
+
+class CompanyDataGenerator:
+    """
+    Specialized generator for company-related data.
+    """
+    
+    COMPANY_PREFIXES = [
+        'Tech', 'Global', 'Digital', 'Smart', 'Dynamic', 'Innovative', 'Advanced',
+        'Premier', 'Elite', 'Superior', 'Mega', 'Ultra', 'Prime', 'Alpha', 'Beta'
+    ]
+    
+    COMPANY_SUFFIXES = [
+        'Corp', 'Inc', 'LLC', 'Ltd', 'Group', 'Associates', 'Partners',
+        'Solutions', 'Systems', 'Services', 'Technologies', 'Industries'
+    ]
+    
+    @staticmethod
+    def generate_company_name(nullable=False, null_probability=0.1):
+        """Generate a random company name."""
+        if nullable and random.random() < null_probability:
+            return None
+        prefix = random.choice(CompanyDataGenerator.COMPANY_PREFIXES)
+        suffix = random.choice(CompanyDataGenerator.COMPANY_SUFFIXES)
+        return f"{prefix} {suffix}"
+
+
+def extract_set_values_from_definition(set_definition):
+    """
+    Utility function to extract values from a SET column definition.
     
     Args:
-        col_meta: ColumnMeta object
-        config: dict with configuration for the column
-    
-    Returns: bool indicating if configuration is valid (warnings are printed but don't fail)
-    """
-    if not config:
-        return True
-    
-    dtype = (col_meta.data_type or "").lower()
-    
-    if "values" in config and "min" in config:
-        print("WARNING: Column {0} has both 'values' and 'min/max' - 'values' will take precedence".format(
-            col_meta.name), file=sys.stderr)
-    
-    # Validate format string for string types (independent of min/max)
-    if "format" in config and dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
-        format_str = config["format"]
-        if "{" not in format_str or "}" not in format_str:
-            print("WARNING: format string '{0}' for column {1} has no placeholders".format(
-                format_str, col_meta.name), file=sys.stderr)
-        else:
-            # Test the format string with a sample value
-            try:
-                format_str.format(1)
-            except (ValueError, KeyError, IndexError) as e:
-                print("WARNING: format string '{0}' for column {1} is invalid: {2}".format(
-                    format_str, col_meta.name, e), file=sys.stderr)
+        set_definition (str): SET type definition string
         
-        # Warn if format is provided without min/max
-        if "min" not in config or "max" not in config:
-            print("WARNING: Column {0} has 'format' but no 'min'/'max' range - format will be ignored".format(
-                col_meta.name), file=sys.stderr)
-    
-    if "min" in config and "max" in config:
-        min_val = config["min"]
-        max_val = config["max"]
-        
-        # Type-specific validation for integer types
-        if dtype in ("int", "integer", "bigint", "smallint", "tinyint", "mediumint"):
-            if not isinstance(min_val, int) or not isinstance(max_val, int):
-                print("WARNING: Column {0} is integer type but min/max are not integers".format(
-                    col_meta.name), file=sys.stderr)
-        
-        # Min < Max validation for numeric types
-        if dtype in ("int", "integer", "bigint", "smallint", "tinyint", "mediumint", 
-                     "decimal", "numeric", "float", "double", "real"):
-            if min_val >= max_val:
-                print("ERROR: Column {0} has min >= max ({1} >= {2})".format(
-                    col_meta.name, min_val, max_val), file=sys.stderr)
-                return False
-        
-        # Date validation
-        if dtype in ("date", "datetime", "timestamp"):
-            min_date = parse_date(str(min_val))
-            max_date = parse_date(str(max_val))
-            if min_date is None:
-                print("ERROR: Column {0} has invalid min date format: {1}".format(
-                    col_meta.name, min_val), file=sys.stderr)
-                return False
-            if max_date is None:
-                print("ERROR: Column {0} has invalid max date format: {1}".format(
-                    col_meta.name, max_val), file=sys.stderr)
-                return False
-            if min_date >= max_date:
-                print("ERROR: Column {0} has min date >= max date ({1} >= {2})".format(
-                    col_meta.name, min_val, max_val), file=sys.stderr)
-                return False
-    
-    return True
-
-def debug_print(*args, **kwargs):
-    if GLOBALS["debug"]:
-        print("[DEBUG]", *args, **kwargs)
-
-def slugify(s):
-    return re.sub(r"[^0-9a-zA-Z_]+", "_", s or "")
-
-def hmac_hex(key_bytes, value):
-    return hmac.new(key_bytes, value.encode("utf-8"), hashlib.sha256).hexdigest()
-
-def pseudonymize_value(value, key_bytes, kind="generic"):
-    if value is None:
-        return None
-    if kind == "email" and "@" in value:
-        user, domain = value.split("@", 1)
-        return "{0}@{1}".format(hmac_hex(key_bytes, user)[:16], domain)
-    if kind == "phone":
-        digits = re.sub(r"\D", "", value)
-        h = hmac_hex(key_bytes, digits or value)[:10]
-        return "{0}-{1}-{2}".format(h[:3], h[3:6], h[6:10])
-    return hmac_hex(key_bytes, value)[:24]
-
-def rand_choice(rng, seq):
-    return rng.choice(seq) if seq else None
-
-def rand_decimal_str(rng, precision, scale):
-    whole_digits = precision - scale
-    max_whole = 10**whole_digits - 1 if whole_digits > 0 else 0
-    whole_part = 0 if max_whole <= 0 else rng.randint(0, max_whole)
-    if scale > 0:
-        frac_part = rng.randint(0, 10**scale - 1)
-        return "{0}.{1}".format(whole_part, str(frac_part). zfill(scale))
-    return str(whole_part)
-
-def rand_string(rng, length=12):
-    return "".join(rng.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(length))
-
-def rand_name(rng):
-    firsts = ["Alice","Bob","Charlie","Dana","Eve","Frank","Grace","Heidi","Ivan","Judy"]
-    lasts = ["Smith","Johnson","Williams","Jones","Brown","Davis","Miller","Wilson"]
-    return "{0} {1}".format(rng.choice(firsts), rng.choice(lasts))
-
-def rand_email(rng, name=None):
-    domains = ["example.com","example.org","test.com"]
-    if name:
-        uname = re.sub(r"[^a-z0-9]", ".", name. lower()). strip(".")
-        return "{0}@{1}". format(uname[:16], rng.choice(domains))
-    return "{0}@{1}".format(rand_string(rng,8). lower(), rng.choice(domains))
-
-def rand_phone(rng):
-    return "{0}-{1}-{2}".format(rng.randint(200,999), rng.randint(200,999), str(rng.randint(0,9999)). zfill(4))
-
-def rand_datetime(rng, start_year=2010, end_year=None):
-    if end_year is None:
-        end_year = datetime.utcnow().year
-    start = datetime(start_year,1,1)
-    end = datetime(end_year,12,31,23,59,59)
-    delta = end - start
-    secs = rng.randint(0, int(delta.total_seconds()))
-    return (start + timedelta(seconds=secs)).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def generate_value_with_config(rng, col, config=None):
-    """
-    Generate a random value for a column, optionally using extended configuration.
-    
-    Args:
-        rng: Random number generator
-        col: ColumnMeta object
-        config: Optional dict with 'min', 'max', 'values', or 'format' keys
-    
-    Returns: Generated value appropriate for the column type
-    """
-    if config is None:
-        config = {}
-    
-    dtype = (col.data_type or "").lower()
-    
-    # Check if specific values are provided
-    if "values" in config:
-        debug_print("Column {0}: Using values list {1}".format(col.name, config["values"]))
-        return rng.choice(config["values"])
-    
-    # Check for min/max range
-    min_val = config.get("min")
-    max_val = config.get("max")
-    has_range = min_val is not None and max_val is not None
-    
-    # Handle integer types with ranges
-    if "int" in dtype or dtype in ("bigint", "smallint", "mediumint", "tinyint"):
-        if has_range:
-            debug_print("Column {0}: Using int range [{1}, {2}]".format(col.name, min_val, max_val))
-            return rng.randint(int(min_val), int(max_val))
-        # Default integer generation
-        if re.search(r"age|years? ", col.name, re.I):
-            return rng.randint(18, 80)
-        return rng.randint(0, 10000)
-    
-    # Handle decimal/float types with ranges
-    elif dtype in ("decimal", "numeric", "float", "double", "real"):
-        if has_range:
-            debug_print("Column {0}: Using decimal range [{1}, {2}]".format(col.name, min_val, max_val))
-            return round(rng.uniform(float(min_val), float(max_val)), 2)
-        # Default decimal generation
-        prec = int(col.numeric_precision or 10)
-        scale = int(col.numeric_scale or 0)
-        return rand_decimal_str(rng, prec, scale)
-    
-    # Handle date/datetime/timestamp types with ranges
-    elif dtype in ("date", "datetime", "timestamp"):
-        if has_range:
-            min_date = parse_date(str(min_val))
-            max_date = parse_date(str(max_val))
-            if min_date and max_date:
-                debug_print("Column {0}: Using date range [{1}, {2}]".format(col.name, min_val, max_val))
-                delta = max_date - min_date
-                random_days = rng.randint(0, max(0, delta.days))
-                random_date = min_date + timedelta(days=random_days)
-                
-                if dtype == "date":
-                    return random_date.strftime("%Y-%m-%d")
-                else:  # datetime/timestamp
-                    # Add random time component
-                    random_seconds = rng.randint(0, 86399)
-                    random_datetime = random_date + timedelta(seconds=random_seconds)
-                    return random_datetime.strftime("%Y-%m-%d %H:%M:%S")
-        # Default date generation
-        return rand_datetime(rng).split(" ")[0] if dtype == "date" else rand_datetime(rng)
-    
-    # Handle string types
-    elif dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
-        # Check if min/max range is provided with optional format
-        if has_range:
-            base_value = rng.randint(int(min_val), int(max_val))
-            
-            # Apply format if provided
-            if "format" in config:
-                format_str = config["format"]
-                try:
-                    formatted_value = format_str.format(base_value)
-                    # Truncate to column max length
-                    maxlen = int(col.char_max_length) if col.char_max_length else 255
-                    return formatted_value[:maxlen]
-                except (ValueError, KeyError, IndexError) as e:
-                    # If format fails, fall back to plain value
-                    print("WARNING: Format string '{0}' failed for column {1}: {2}. Using plain value.".format(
-                        format_str, col.name, e), file=sys.stderr)
-                    return str(base_value)
-            
-            # No format specified, return as string
-            return str(base_value)
-        
-        lname = col.name.lower()
-        if "email" in lname:
-            return rand_email(rng)
-        elif "name" in lname:
-            return rand_name(rng)
-        elif "phone" in lname:
-            return rand_phone(rng)
-        else:
-            maxlen = int(col.char_max_length) if col.char_max_length else 24
-            return rand_string(rng, min(maxlen, 24))
-    
-    # Handle enum types
-    elif dtype == "enum":
-        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
-        vals = [v.replace("''", "'") for v in m]
-        return rng.choice(vals) if vals else None
-    
-    # Handle set types
-    elif dtype == "set":
-        # Parse SET values from column_type: SET('val1','val2','val3')
-        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
-        set_values = [v.replace("''", "'") for v in m]
-        
-        if set_values:
-            # Generate random subset: select 0 to N values
-            num_values_to_select = rng.randint(0, len(set_values))
-            
-            if num_values_to_select == 0:
-                return ''  # Empty set
-            else:
-                # Shuffle and select subset
-                shuffled = list(set_values)
-                rng.shuffle(shuffled)
-                selected = shuffled[:num_values_to_select]
-                
-                # Sort selected values to maintain consistent ordering
-                # (MySQL SET internally orders values by definition order)
-                # Re-sort by original position in set_values
-                selected_sorted = [v for v in set_values if v in selected]
-                return ','.join(selected_sorted)
-        return ''  # No valid SET values, use empty
-    
-    # Default: return random string for non-nullable columns
-    elif col.is_nullable == "NO":
-        return rand_string(rng, 8)
-    
-    return None
-
-
-ColumnMeta = namedtuple("ColumnMeta", ["name","data_type","is_nullable","column_type","column_key","extra","char_max_length","numeric_precision","numeric_scale","column_default"])
-FKMeta = namedtuple("FKMeta", ["constraint_name","table_schema","table_name","column_name","referenced_table_schema","referenced_table_name","referenced_column_name","is_logical","condition"])
-TableMeta = namedtuple("TableMeta", ["schema","name","columns","pk_columns","auto_increment","engine"])
-UniqueConstraint = namedtuple("UniqueConstraint", ["constraint_name","columns"])
-
-def parse_fk_condition(condition_str):
-    """
-    Parse a simple FK condition like "T = 'some_string'"
-    Returns: dict with 'column', 'operator', 'value' or None if parsing fails
-    """
-    if not condition_str:
-        return None
-    
-    # Simple equality check: "column = 'value'"
-    match = re.match(r"^\s*(\w+)\s*=\s*'([^']*)'\s*$", condition_str)
-    if match:
-        return {
-            'column': match.group(1),
-            'operator': '=',
-            'value': match.group(2)
-        }
-    
-    # Add support for other patterns as needed
-    return None
-
-def evaluate_fk_condition(condition_str, row):
-    """
-    Evaluate a FK condition against a row.
-    Returns True if condition is met, False otherwise.
-    If condition is None or empty, returns True (unconditional FK).
-    """
-    if not condition_str:
-        return True
-    
-    parsed = parse_fk_condition(condition_str)
-    if not parsed:
-        debug_print("WARNING: Could not parse condition: {0}".format(condition_str))
-        return False
-    
-    discriminator_col = parsed['column']
-    discriminator_value = row.get(discriminator_col)
-    
-    if parsed['operator'] == '=':
-        return discriminator_value == parsed['value']
-    
-    return False
-
-
-def generate_unique_value_pool(col_meta, config, needed_count, rng):
-    """
-    Generate a pool of unique values for a column based on its configuration.
-    Used to pre-allocate unique values for columns with UNIQUE constraints.
-    
-    Args:
-        col_meta: ColumnMeta object
-        config: populate_columns configuration dict with 'min'/'max', 'values', or 'format'
-        needed_count: number of unique values needed
-        rng: random number generator
-    
     Returns:
-        List of unique values (shuffled)
+        list: Extracted values
     """
-    dtype = (col_meta.data_type or "").lower()
+    if not set_definition:
+        return []
     
-    # If values array is specified, use it
-    if "values" in config:
-        values = config["values"]
-        if len(values) < needed_count:
-            print("WARNING: Column {0} has {1} unique values but {2} rows requested".format(
-                col_meta.name, len(values), needed_count), file=sys.stderr)
-        # Shuffle and return
-        pool = list(values)
-        rng.shuffle(pool)
-        return pool
-    
-    # For numeric types with min/max
-    if dtype in ("int", "integer", "bigint", "smallint", "tinyint", "mediumint"):
-        min_val = config.get("min", 1)
-        max_val = config.get("max", 2147483647)
-        
-        range_size = int(max_val) - int(min_val) + 1
-        if range_size < needed_count:
-            print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
-                col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
-        
-        # For large ranges, sample instead of generating all
-        if range_size > needed_count * 2 and range_size > 100000:
-            # Random sampling for large ranges
-            unique_values = set()
-            max_attempts = needed_count * 10
-            attempts = 0
-            while len(unique_values) < needed_count and attempts < max_attempts:
-                val = rng.randint(int(min_val), int(max_val))
-                unique_values.add(val)
-                attempts += 1
-            pool = list(unique_values)
-        else:
-            # Generate all possible values in range and shuffle
-            all_values = list(range(int(min_val), int(max_val) + 1))
-            rng.shuffle(all_values)
-            pool = all_values[:needed_count]
-        
-        return pool
-    
-    elif dtype in ("decimal", "numeric", "float", "double", "real"):
-        min_val = config.get("min", 0.0)
-        max_val = config.get("max", 1000000.0)
-        
-        # Use column's numeric_scale for rounding precision, default to 2
-        scale = int(col_meta.numeric_scale) if col_meta.numeric_scale else 2
-        
-        # For floats, generate random unique values
-        # Use a set to ensure uniqueness
-        unique_values = set()
-        attempts = 0
-        max_attempts = needed_count * UNIQUE_VALUE_MAX_ATTEMPTS_MULTIPLIER
-        
-        while len(unique_values) < needed_count and attempts < max_attempts:
-            val = round(rng.uniform(float(min_val), float(max_val)), scale)
-            unique_values.add(val)
-            attempts += 1
-        
-        if len(unique_values) < needed_count:
-            print("WARNING: Column {0} could only generate {1} unique float values after {2} attempts".format(
-                col_meta.name, len(unique_values), max_attempts), file=sys.stderr)
-        
-        pool = list(unique_values)
-        rng.shuffle(pool)
-        return pool
-    
-    elif dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
-        # Check if min/max range is provided with optional format
-        min_val = config.get("min")
-        max_val = config.get("max")
-        
-        if min_val is not None and max_val is not None:
-            range_size = int(max_val) - int(min_val) + 1
-            if range_size < needed_count:
-                print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
-                    col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
-            
-            # For large ranges, sample instead of generating all
-            if range_size > needed_count * 2 and range_size > 100000:
-                # Random sampling for large ranges
-                unique_values = set()
-                max_attempts = needed_count * 10
-                attempts = 0
-                while len(unique_values) < needed_count and attempts < max_attempts:
-                    val = rng.randint(int(min_val), int(max_val))
-                    unique_values.add(val)
-                    attempts += 1
-                all_values = list(unique_values)
-            else:
-                # Generate all possible values in range and shuffle
-                all_values = list(range(int(min_val), int(max_val) + 1))
-                rng.shuffle(all_values)
-                all_values = all_values[:needed_count]
-            
-            # Apply format if specified
-            if "format" in config:
-                format_str = config["format"]
-                maxlen = int(col_meta.char_max_length) if col_meta.char_max_length else 255
-                
-                formatted_values = []
-                for val in all_values:
-                    try:
-                        formatted = format_str.format(val)
-                        formatted_values.append(formatted[:maxlen])
-                    except (ValueError, KeyError, IndexError):
-                        # Fallback to plain value if format fails
-                        formatted_values.append(str(val))
-                
-                rng.shuffle(formatted_values)
-                return formatted_values
-            
-            # No format specified, return as strings
-            pool = [str(val) for val in all_values]
-            rng.shuffle(pool)
-            return pool
-        
-        # For strings without values or min/max, generate random strings with guaranteed uniqueness
-        unique_values = set()
-        max_length = col_meta.char_max_length or 20
-        # Use actual max length, but cap at reasonable value for performance
-        effective_max = min(int(max_length), 50)
-        min_length = min(5, effective_max)
-        
-        attempts = 0
-        max_attempts = needed_count * UNIQUE_VALUE_MAX_ATTEMPTS_MULTIPLIER
-        
-        while len(unique_values) < needed_count and attempts < max_attempts:
-            # Generate random string
-            length = rng.randint(min_length, effective_max)
-            val = ''.join(rng.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-            unique_values.add(val)
-            attempts += 1
-        
-        pool = list(unique_values)
-        rng.shuffle(pool)
-        return pool
-    
-    elif dtype in ("date", "datetime", "timestamp"):
-        min_val = config.get("min")
-        max_val = config.get("max")
-        
-        if min_val and max_val:
-            min_date = parse_date(str(min_val))
-            max_date = parse_date(str(max_val))
-            
-            if min_date and max_date:
-                delta_days = (max_date - min_date).days
-                
-                if delta_days < needed_count:
-                    print("WARNING: Column {0} date range has only {1} days but {2} rows requested".format(
-                        col_meta.name, delta_days + 1, needed_count), file=sys.stderr)
-                
-                # Generate unique dates
-                if delta_days + 1 > needed_count * 2 and delta_days + 1 > 100000:
-                    # Random sampling for large date ranges
-                    unique_days = set()
-                    max_attempts = needed_count * 10
-                    attempts = 0
-                    while len(unique_days) < needed_count and attempts < max_attempts:
-                        day_offset = rng.randint(0, delta_days)
-                        unique_days.add(day_offset)
-                        attempts += 1
-                    day_offsets = list(unique_days)
-                else:
-                    all_days = list(range(delta_days + 1))
-                    rng.shuffle(all_days)
-                    day_offsets = all_days[:needed_count]
-                
-                unique_dates = []
-                for day_offset in day_offsets:
-                    date_val = min_date + timedelta(days=day_offset)
-                    
-                    if dtype == "date":
-                        unique_dates.append(date_val.strftime("%Y-%m-%d"))
-                    else:
-                        # Add random time for datetime/timestamp to ensure uniqueness
-                        random_seconds = rng.randint(0, 86399)
-                        datetime_val = date_val + timedelta(seconds=random_seconds)
-                        unique_dates.append(datetime_val.strftime("%Y-%m-%d %H:%M:%S"))
-                
-                return unique_dates
-    
-    # Fallback: return empty pool
-    return []
+    m = CompiledPatterns.ENUM_PATTERN.findall(set_definition or "")
+    return [v.replace("''", "'") for v in m]
 
 
-def validate_set_value(set_definition, value):
+def create_column_metadata(name, data_type, column_type=None, is_nullable=True):
     """
-    Validate that a SET value is valid according to the column definition.
+    Helper function to create ColumnMetadata objects.
     
     Args:
-        set_definition: The COLUMN_TYPE string, e.g., "set('a','b','c')"
-        value: The value to validate, e.g., "a,c"
-    
+        name (str): Column name
+        data_type (str): Data type
+        column_type (str, optional): Full column type definition
+        is_nullable (bool): Whether column accepts null values
+        
     Returns:
-        bool: True if valid
+        ColumnMetadata: Column metadata object
     """
-    if value is None or value == '':  # Empty string is valid
-        return True
-    
-    # Parse allowed values
-    m = re.findall(r"'((?:[^']|(?:''))*)'", set_definition or "")
-    allowed_values = {v.replace("''", "'") for v in m}
-    
-    # Parse provided value
-    provided_values = [v.strip() for v in str(value).split(',')]
-    
-    # Check all provided values are in allowed set
-    for pv in provided_values:
-        if pv not in allowed_values:
-            return False
-    
-    return True
-
-
-def sql_literal(value):
-    if value is None:
-        return "NULL"
-    if isinstance(value, str):
-        if value.startswith("@") and re.match(r"^@[0-9A-Za-z_]+$", value):
-            return value
-        return "'" + value.replace("'", "''") + "'"
-    return str(value)
-
-def render_insert_statement(schema, table, colnames, rows_values, multirow=True, max_rows_per_statement=1000):
-    """Render INSERT with configurable batch size to avoid max_allowed_packet"""
-    if not rows_values:
-        return ""
-    cols = ",".join("`{0}`".format(c) for c in colnames)
-    
-    if multirow and len(rows_values) > 1:
-        statements = []
-        for i in range(0, len(rows_values), max_rows_per_statement):
-            chunk = rows_values[i:i+max_rows_per_statement]
-            vals = ["(" + ",".join(sql_literal(v) for v in rv) + ")" for rv in chunk]
-            statements.append("INSERT INTO `{0}`. `{1}` ({2}) VALUES\n{3};\n".format(
-                schema, table, cols, ",\n".join(vals)))
-        return "".join(statements)
-    else:
-        stmts = []
-        for rv in rows_values:
-            vals = "(" + ",".join(sql_literal(v) for v in rv) + ")"
-            stmts.append("INSERT INTO `{0}`.`{1}` ({2}) VALUES {3};".format(schema, table, cols, vals))
-        return "\n".join(stmts) + "\n"
+    return ColumnMetadata(
+        name=name,
+        data_type=data_type,
+        column_type=column_type,
+        is_nullable=is_nullable
+    )
