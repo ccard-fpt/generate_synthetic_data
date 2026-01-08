@@ -1,641 +1,665 @@
 #!/usr/bin/env python3
-"""Utility functions and data structures for synthetic data generation"""
+# -*- coding: utf-8 -*-
 import hashlib, hmac, re, random, sys
-from datetime import datetime, timedelta
-from collections import namedtuple
+import os, json
+from typing import Optional, List, Dict, Any, Tuple
+from generate_synthetic_data_patterns import CompiledPatterns
+from decimal import Decimal, InvalidOperation
 
-GLOBALS = {"debug": False}
+class ColumnConstraint:
+    """Represents a constraint on a column (CHECK, DEFAULT, etc.)."""
+    def __init__(self, constraint_type: str, definition: str):
+        self.constraint_type = constraint_type.upper()
+        self.definition = definition
 
-# Maximum attempt multiplier for generating unique values (used in generate_unique_value_pool)
-UNIQUE_VALUE_MAX_ATTEMPTS_MULTIPLIER = 10
+    def __repr__(self):
+        return f"ColumnConstraint(type={self.constraint_type}, def={self.definition})"
 
+class ForeignKeyConstraint:
+    """Represents a foreign key relationship."""
+    def __init__(self, column_name: str, ref_table: str, ref_column: str, on_delete: str = "NO ACTION", on_update: str = "NO ACTION"):
+        self.column_name = column_name
+        self.ref_table = ref_table
+        self.ref_column = ref_column
+        self.on_delete = on_delete.upper()
+        self.on_update = on_update.upper()
 
-def parse_date(date_str):
-    """
-    Parse date string in various formats.
-    Supports: YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, ISO format
-    
-    Returns: datetime object or None if parsing fails
-    """
-    if not date_str:
+    def __repr__(self):
+        return (f"ForeignKeyConstraint({self.column_name} -> "
+                f"{self.ref_table}.{self.ref_column}, "
+                f"ON DELETE {self.on_delete}, ON UPDATE {self.on_update})")
+
+class ColumnDefinition:
+    """Represents a column in a table."""
+    def __init__(self, name: str, column_type: str, is_nullable: bool = True,
+                 default_value: Optional[str] = None, is_primary_key: bool = False,
+                 is_auto_increment: bool = False, character_maximum_length: Optional[int] = None,
+                 numeric_precision: Optional[int] = None, numeric_scale: Optional[int] = None,
+                 extra: Optional[str] = None):
+        self.name = name
+        self.column_type = column_type.upper()
+        self.is_nullable = is_nullable
+        self.default_value = default_value
+        self.is_primary_key = is_primary_key
+        self.is_auto_increment = is_auto_increment
+        self.character_maximum_length = character_maximum_length
+        self.numeric_precision = numeric_precision
+        self.numeric_scale = numeric_scale
+        self.extra = extra or ""
+        self.constraints: List[ColumnConstraint] = []
+
+    def add_constraint(self, constraint: ColumnConstraint):
+        self.constraints.append(constraint)
+
+    def __repr__(self):
+        return (f"ColumnDefinition(name={self.name}, type={self.column_type}, "
+                f"nullable={self.is_nullable}, pk={self.is_primary_key}, "
+                f"auto_inc={self.is_auto_increment})")
+
+class TableDefinition:
+    """Represents a table schema."""
+    def __init__(self, name: str, schema: str = "public"):
+        self.name = name
+        self.schema = schema
+        self.columns: List[ColumnDefinition] = []
+        self.foreign_keys: List[ForeignKeyConstraint] = []
+
+    def add_column(self, column: ColumnDefinition):
+        self.columns.append(column)
+
+    def add_foreign_key(self, fk: ForeignKeyConstraint):
+        self.foreign_keys.append(fk)
+
+    def get_primary_key_columns(self) -> List[ColumnDefinition]:
+        return [col for col in self.columns if col.is_primary_key]
+
+    def get_column(self, name: str) -> Optional[ColumnDefinition]:
+        for col in self.columns:
+            if col.name.lower() == name.lower():
+                return col
         return None
-    formats = [
-        "%Y-%m-%d",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S"
-    ]
-    for fmt in formats:
-        try:
-            return datetime.strptime(date_str, fmt)
-        except ValueError:
-            continue
-    return None
 
+    def __repr__(self):
+        return f"TableDefinition(name={self.name}, columns={len(self.columns)}, fks={len(self.foreign_keys)})"
 
-def parse_populate_columns_config(table_cfg):
-    """
-    Parse populate_columns configuration supporting both formats:
-    - String: "column_name" (backward compatible)
-    - Object: {"column": "name", "min": X, "max": Y} or {"column": "name", "values": [...]}
+class DataGenerator:
+    """Handles generation of synthetic data based on column types and constraints."""
     
-    Returns: dict mapping column_name -> config_object
-    """
-    populate_cols = {}
-    for item in table_cfg.get("populate_columns", []):
-        if isinstance(item, str):
-            # Backward compatible: simple column name
-            populate_cols[item] = {"column": item}
-        elif isinstance(item, dict):
-            # Extended format
-            col_name = item.get("column")
-            if col_name:
-                populate_cols[col_name] = item
-            else:
-                print("WARNING: populate_columns entry missing 'column' field: {0}".format(item), file=sys.stderr)
-    return populate_cols
+    def __init__(self, seed: Optional[int] = None):
+        if seed is not None:
+            random.seed(seed)
+        
+        # Common data pools
+        self.first_names = [
+            "James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
+            "William", "Barbara", "David", "Elizabeth", "Richard", "Susan", "Joseph", "Jessica",
+            "Thomas", "Sarah", "Charles", "Karen", "Christopher", "Nancy", "Daniel", "Lisa",
+            "Matthew", "Betty", "Anthony", "Margaret", "Mark", "Sandra", "Donald", "Ashley",
+            "Steven", "Kimberly", "Paul", "Emily", "Andrew", "Donna", "Joshua", "Michelle",
+            "Kenneth", "Dorothy", "Kevin", "Carol", "Brian", "Amanda", "George", "Melissa",
+            "Edward", "Deborah", "Ronald", "Stephanie", "Timothy", "Rebecca", "Jason", "Sharon",
+            "Jeffrey", "Laura", "Ryan", "Cynthia", "Jacob", "Kathleen", "Gary", "Amy",
+            "Nicholas", "Shirley", "Eric", "Angela", "Jonathan", "Helen", "Stephen", "Anna",
+            "Larry", "Brenda", "Justin", "Pamela", "Scott", "Nicole", "Brandon", "Emma",
+            "Benjamin", "Samantha", "Samuel", "Katherine", "Raymond", "Christine", "Gregory", "Debra",
+            "Frank", "Rachel", "Alexander", "Catherine", "Patrick", "Carolyn", "Raymond", "Janet",
+            "Jack", "Ruth", "Dennis", "Maria", "Jerry", "Heather", "Tyler", "Diane",
+            "Aaron", "Virginia", "Jose", "Julie", "Adam", "Joyce", "Henry", "Victoria",
+            "Nathan", "Olivia", "Douglas", "Kelly", "Zachary", "Christina", "Peter", "Lauren",
+            "Kyle", "Joan", "Walter", "Evelyn", "Ethan", "Judith", "Jeremy", "Megan",
+            "Harold", "Cheryl", "Keith", "Andrea", "Christian", "Hannah", "Roger", "Martha",
+            "Noah", "Jacqueline", "Gerald", "Frances", "Carl", "Gloria", "Terry", "Ann",
+            "Sean", "Teresa", "Austin", "Kathryn", "Arthur", "Sara", "Lawrence", "Janice"
+        ]
+        
+        self.last_names = [
+            "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
+            "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas",
+            "Taylor", "Moore", "Jackson", "Martin", "Lee", "Perez", "Thompson", "White",
+            "Harris", "Sanchez", "Clark", "Ramirez", "Lewis", "Robinson", "Walker", "Young",
+            "Allen", "King", "Wright", "Scott", "Torres", "Nguyen", "Hill", "Flores",
+            "Green", "Adams", "Nelson", "Baker", "Hall", "Rivera", "Campbell", "Mitchell",
+            "Carter", "Roberts", "Gomez", "Phillips", "Evans", "Turner", "Diaz", "Parker",
+            "Cruz", "Edwards", "Collins", "Reyes", "Stewart", "Morris", "Morales", "Murphy",
+            "Cook", "Rogers", "Gutierrez", "Ortiz", "Morgan", "Cooper", "Peterson", "Bailey",
+            "Reed", "Kelly", "Howard", "Ramos", "Kim", "Cox", "Ward", "Richardson",
+            "Watson", "Brooks", "Chavez", "Wood", "James", "Bennett", "Gray", "Mendoza",
+            "Ruiz", "Hughes", "Price", "Alvarez", "Castillo", "Sanders", "Patel", "Myers",
+            "Long", "Ross", "Foster", "Jimenez", "Powell", "Jenkins", "Perry", "Russell",
+            "Sullivan", "Bell", "Coleman", "Butler", "Henderson", "Barnes", "Gonzales", "Fisher",
+            "Vasquez", "Simmons", "Romero", "Jordan", "Patterson", "Alexander", "Hamilton", "Graham",
+            "Reynolds", "Griffin", "Wallace", "Moreno", "West", "Cole", "Hayes", "Bryant",
+            "Herrera", "Gibson", "Ellis", "Tran", "Medina", "Aguilar", "Stevens", "Murray",
+            "Ford", "Castro", "Marshall", "Owens", "Harrison", "Fernandez", "McDonald", "Woods",
+            "Washington", "Kennedy", "Wells", "Vargas", "Henry", "Chen", "Freeman", "Webb"
+        ]
+        
+        self.cities = [
+            "New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia", "San Antonio",
+            "San Diego", "Dallas", "San Jose", "Austin", "Jacksonville", "Fort Worth", "Columbus",
+            "Charlotte", "San Francisco", "Indianapolis", "Seattle", "Denver", "Washington",
+            "Boston", "El Paso", "Nashville", "Detroit", "Oklahoma City", "Portland", "Las Vegas",
+            "Memphis", "Louisville", "Baltimore", "Milwaukee", "Albuquerque", "Tucson", "Fresno",
+            "Mesa", "Sacramento", "Atlanta", "Kansas City", "Colorado Springs", "Omaha",
+            "Raleigh", "Miami", "Long Beach", "Virginia Beach", "Oakland", "Minneapolis", "Tulsa",
+            "Tampa", "Arlington", "New Orleans", "Wichita", "Cleveland", "Bakersfield", "Aurora",
+            "Anaheim", "Honolulu", "Santa Ana", "Riverside", "Corpus Christi", "Lexington"
+        ]
+        
+        self.states = [
+            "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+            "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+            "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+            "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+            "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+        ]
+        
+        self.domains = ["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "example.com"]
+        
+        self.street_names = [
+            "Main", "Oak", "Maple", "Cedar", "Elm", "Washington", "Lake", "Hill",
+            "Park", "River", "Pine", "Church", "Spring", "Sunset", "Forest", "Broadway"
+        ]
+        
+        self.street_types = ["St", "Ave", "Blvd", "Rd", "Dr", "Ln", "Ct", "Way"]
 
+    def sanitize_identifier(self, s: Optional[str]) -> str:
+        """Convert a string to a safe identifier (alphanumeric + underscore)."""
+        return CompiledPatterns.NON_ALPHANUMERIC.sub("_", s or "")
 
-def validate_populate_column_config(col_meta, config):
-    """
-    Validate that the configuration is appropriate for the column type.
-    
-    Args:
-        col_meta: ColumnMeta object
-        config: dict with configuration for the column
-    
-    Returns: bool indicating if configuration is valid (warnings are printed but don't fail)
-    """
-    if not config:
-        return True
-    
-    dtype = (col_meta.data_type or "").lower()
-    
-    if "values" in config and "min" in config:
-        print("WARNING: Column {0} has both 'values' and 'min/max' - 'values' will take precedence".format(
-            col_meta.name), file=sys.stderr)
-    
-    # Validate format string for string types (independent of min/max)
-    if "format" in config and dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
-        format_str = config["format"]
-        if "{" not in format_str or "}" not in format_str:
-            print("WARNING: format string '{0}' for column {1} has no placeholders".format(
-                format_str, col_meta.name), file=sys.stderr)
+    def generate_email(self, first_name: Optional[str] = None, last_name: Optional[str] = None) -> str:
+        """Generate a synthetic email address."""
+        if not first_name:
+            first_name = random.choice(self.first_names)
+        if not last_name:
+            last_name = random.choice(self.last_names)
+        
+        domain = random.choice(self.domains)
+        
+        # Clean names for email
+        digits = CompiledPatterns.NON_DIGIT.sub("", value)
+        fname = first_name.lower().replace(" ", "")
+        lname = last_name.lower().replace(" ", "")
+        
+        patterns = [
+            f"{fname}.{lname}@{domain}",
+            f"{fname}{lname}@{domain}",
+            f"{fname[0]}{lname}@{domain}",
+            f"{fname}_{lname}@{domain}",
+            f"{fname}{random.randint(1, 999)}@{domain}"
+        ]
+        
+        return random.choice(patterns)
+
+    def generate_phone(self) -> str:
+        """Generate a synthetic US phone number."""
+        area_code = random.randint(200, 999)
+        exchange = random.randint(200, 999)
+        number = random.randint(1000, 9999)
+        
+        formats = [
+            f"({area_code}) {exchange}-{number}",
+            f"{area_code}-{exchange}-{number}",
+            f"{area_code}.{exchange}.{number}",
+            f"{area_code}{exchange}{number}"
+        ]
+        
+        return random.choice(formats)
+
+    def generate_username(self, name: Optional[str] = None) -> str:
+        """Generate a synthetic username."""
+        if not name:
+            name = f"{random.choice(self.first_names)}{random.choice(self.last_names)}"
+        
+        uname = CompiledPatterns.NON_ALPHANUM_DOT.sub(".", name. lower()). strip(".")
+        
+        # Sometimes add a number suffix
+        if random.random() < 0.3:
+            uname += str(random.randint(1, 999))
+        
+        return uname
+
+    def generate_address(self) -> str:
+        """Generate a synthetic street address."""
+        number = random.randint(1, 9999)
+        street = random.choice(self.street_names)
+        street_type = random.choice(self.street_types)
+        
+        return f"{number} {street} {street_type}"
+
+    def generate_city(self) -> str:
+        """Generate a city name."""
+        return random.choice(self.cities)
+
+    def generate_state(self) -> str:
+        """Generate a US state code."""
+        return random.choice(self.states)
+
+    def generate_zip(self) -> str:
+        """Generate a synthetic ZIP code."""
+        if random.random() < 0.7:
+            return f"{random.randint(10000, 99999)}"
         else:
-            # Test the format string with a sample value
-            try:
-                format_str.format(1)
-            except (ValueError, KeyError, IndexError) as e:
-                print("WARNING: format string '{0}' for column {1} is invalid: {2}".format(
-                    format_str, col_meta.name, e), file=sys.stderr)
+            return f"{random.randint(10000, 99999)}-{random.randint(1000, 9999)}"
+
+    def generate_value_for_column(self, col: ColumnDefinition, table_data: Dict[str, List[Dict]] = None) -> Any:
+        """
+        Generate a synthetic value for a given column based on its type and constraints.
+        table_data is a dict: table_name -> list of row dicts (for FK lookups).
+        """
+        col_name_lower = col.name.lower()
+        col_type = col.column_type.upper()
         
-        # Warn if format is provided without min/max
-        if "min" not in config or "max" not in config:
-            print("WARNING: Column {0} has 'format' but no 'min'/'max' range - format will be ignored".format(
-                col_meta.name), file=sys.stderr)
-    
-    if "min" in config and "max" in config:
-        min_val = config["min"]
-        max_val = config["max"]
+        # Handle auto-increment columns
+        if col.is_auto_increment:
+            return None  # Will be handled by the database
         
-        # Type-specific validation for integer types
-        if dtype in ("int", "integer", "bigint", "smallint", "tinyint", "mediumint"):
-            if not isinstance(min_val, int) or not isinstance(max_val, int):
-                print("WARNING: Column {0} is integer type but min/max are not integers".format(
-                    col_meta.name), file=sys.stderr)
+        # Handle default values
+        if col.default_value and col.default_value.upper() not in ("NULL", "CURRENT_TIMESTAMP"):
+            return col.default_value.strip("'\"")
         
-        # Min < Max validation for numeric types
-        if dtype in ("int", "integer", "bigint", "smallint", "tinyint", "mediumint", 
-                     "decimal", "numeric", "float", "double", "real"):
-            if min_val >= max_val:
-                print("ERROR: Column {0} has min >= max ({1} >= {2})".format(
-                    col_meta.name, min_val, max_val), file=sys.stderr)
-                return False
+        # Check for age-related columns
+        if CompiledPatterns.AGE_PATTERN.search(col.name):
+            return random.randint(18, 80)
         
-        # Date validation
-        if dtype in ("date", "datetime", "timestamp"):
-            min_date = parse_date(str(min_val))
-            max_date = parse_date(str(max_val))
-            if min_date is None:
-                print("ERROR: Column {0} has invalid min date format: {1}".format(
-                    col_meta.name, min_val), file=sys.stderr)
-                return False
-            if max_date is None:
-                print("ERROR: Column {0} has invalid max date format: {1}".format(
-                    col_meta.name, max_val), file=sys.stderr)
-                return False
-            if min_date >= max_date:
-                print("ERROR: Column {0} has min date >= max date ({1} >= {2})".format(
-                    col_meta.name, min_val, max_val), file=sys.stderr)
-                return False
-    
-    return True
-
-def debug_print(*args, **kwargs):
-    if GLOBALS["debug"]:
-        print("[DEBUG]", *args, **kwargs)
-
-def slugify(s):
-    return re.sub(r"[^0-9a-zA-Z_]+", "_", s or "")
-
-def hmac_hex(key_bytes, value):
-    return hmac.new(key_bytes, value.encode("utf-8"), hashlib.sha256).hexdigest()
-
-def pseudonymize_value(value, key_bytes, kind="generic"):
-    if value is None:
-        return None
-    if kind == "email" and "@" in value:
-        user, domain = value.split("@", 1)
-        return "{0}@{1}".format(hmac_hex(key_bytes, user)[:16], domain)
-    if kind == "phone":
-        digits = re.sub(r"\D", "", value)
-        h = hmac_hex(key_bytes, digits or value)[:10]
-        return "{0}-{1}-{2}".format(h[:3], h[3:6], h[6:10])
-    return hmac_hex(key_bytes, value)[:24]
-
-def rand_choice(rng, seq):
-    return rng.choice(seq) if seq else None
-
-def rand_decimal_str(rng, precision, scale):
-    whole_digits = precision - scale
-    max_whole = 10**whole_digits - 1 if whole_digits > 0 else 0
-    whole_part = 0 if max_whole <= 0 else rng.randint(0, max_whole)
-    if scale > 0:
-        frac_part = rng.randint(0, 10**scale - 1)
-        return "{0}.{1}".format(whole_part, str(frac_part). zfill(scale))
-    return str(whole_part)
-
-def rand_string(rng, length=12):
-    return "".join(rng.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(length))
-
-def rand_name(rng):
-    firsts = ["Alice","Bob","Charlie","Dana","Eve","Frank","Grace","Heidi","Ivan","Judy"]
-    lasts = ["Smith","Johnson","Williams","Jones","Brown","Davis","Miller","Wilson"]
-    return "{0} {1}".format(rng.choice(firsts), rng.choice(lasts))
-
-def rand_email(rng, name=None):
-    domains = ["example.com","example.org","test.com"]
-    if name:
-        uname = re.sub(r"[^a-z0-9]", ".", name. lower()). strip(".")
-        return "{0}@{1}". format(uname[:16], rng.choice(domains))
-    return "{0}@{1}".format(rand_string(rng,8). lower(), rng.choice(domains))
-
-def rand_phone(rng):
-    return "{0}-{1}-{2}".format(rng.randint(200,999), rng.randint(200,999), str(rng.randint(0,9999)). zfill(4))
-
-def rand_datetime(rng, start_year=2010, end_year=None):
-    if end_year is None:
-        end_year = datetime.utcnow().year
-    start = datetime(start_year,1,1)
-    end = datetime(end_year,12,31,23,59,59)
-    delta = end - start
-    secs = rng.randint(0, int(delta.total_seconds()))
-    return (start + timedelta(seconds=secs)).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def generate_value_with_config(rng, col, config=None):
-    """
-    Generate a random value for a column, optionally using extended configuration.
-    
-    Args:
-        rng: Random number generator
-        col: ColumnMeta object
-        config: Optional dict with 'min', 'max', 'values', or 'format' keys
-    
-    Returns: Generated value appropriate for the column type
-    """
-    if config is None:
-        config = {}
-    
-    dtype = (col.data_type or "").lower()
-    
-    # Check if specific values are provided
-    if "values" in config:
-        debug_print("Column {0}: Using values list {1}".format(col.name, config["values"]))
-        return rng.choice(config["values"])
-    
-    # Check for min/max range
-    min_val = config.get("min")
-    max_val = config.get("max")
-    has_range = min_val is not None and max_val is not None
-    
-    # Handle integer types with ranges
-    if "int" in dtype or dtype in ("bigint", "smallint", "mediumint", "tinyint"):
-        if has_range:
-            debug_print("Column {0}: Using int range [{1}, {2}]".format(col.name, min_val, max_val))
-            return rng.randint(int(min_val), int(max_val))
-        # Default integer generation
-        if re.search(r"age|years? ", col.name, re.I):
-            return rng.randint(18, 80)
-        return rng.randint(0, 10000)
-    
-    # Handle decimal/float types with ranges
-    elif dtype in ("decimal", "numeric", "float", "double", "real"):
-        if has_range:
-            debug_print("Column {0}: Using decimal range [{1}, {2}]".format(col.name, min_val, max_val))
-            return round(rng.uniform(float(min_val), float(max_val)), 2)
-        # Default decimal generation
-        prec = int(col.numeric_precision or 10)
-        scale = int(col.numeric_scale or 0)
-        return rand_decimal_str(rng, prec, scale)
-    
-    # Handle date/datetime/timestamp types with ranges
-    elif dtype in ("date", "datetime", "timestamp"):
-        if has_range:
-            min_date = parse_date(str(min_val))
-            max_date = parse_date(str(max_val))
-            if min_date and max_date:
-                debug_print("Column {0}: Using date range [{1}, {2}]".format(col.name, min_val, max_val))
-                delta = max_date - min_date
-                random_days = rng.randint(0, max(0, delta.days))
-                random_date = min_date + timedelta(days=random_days)
-                
-                if dtype == "date":
-                    return random_date.strftime("%Y-%m-%d")
-                else:  # datetime/timestamp
-                    # Add random time component
-                    random_seconds = rng.randint(0, 86399)
-                    random_datetime = random_date + timedelta(seconds=random_seconds)
-                    return random_datetime.strftime("%Y-%m-%d %H:%M:%S")
-        # Default date generation
-        return rand_datetime(rng).split(" ")[0] if dtype == "date" else rand_datetime(rng)
-    
-    # Handle string types
-    elif dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
-        # Check if min/max range is provided with optional format
-        if has_range:
-            base_value = rng.randint(int(min_val), int(max_val))
+        # Name-based heuristics
+        if "email" in col_name_lower:
+            return self.generate_email()
+        elif "phone" in col_name_lower or "tel" in col_name_lower or "mobile" in col_name_lower:
+            return self.generate_phone()
+        elif "username" in col_name_lower or "user_name" in col_name_lower:
+            return self.generate_username()
+        elif "first_name" in col_name_lower or "firstname" in col_name_lower or "fname" in col_name_lower:
+            return random.choice(self.first_names)
+        elif "last_name" in col_name_lower or "lastname" in col_name_lower or "lname" in col_name_lower:
+            return random.choice(self.last_names)
+        elif "name" in col_name_lower and "user" not in col_name_lower:
+            return f"{random.choice(self.first_names)} {random.choice(self.last_names)}"
+        elif "address" in col_name_lower and "email" not in col_name_lower:
+            return self.generate_address()
+        elif "city" in col_name_lower:
+            return self.generate_city()
+        elif "state" in col_name_lower:
+            return self.generate_state()
+        elif "zip" in col_name_lower or "postal" in col_name_lower:
+            return self.generate_zip()
+        elif "country" in col_name_lower:
+            return random.choice(["USA", "Canada", "UK", "Germany", "France", "Australia"])
+        elif "description" in col_name_lower or "comment" in col_name_lower or "notes" in col_name_lower:
+            return f"Sample {col.name} text for testing purposes."
+        
+        # Type-based generation
+        if "INT" in col_type or "SERIAL" in col_type or "BIGINT" in col_type or "SMALLINT" in col_type:
+            # Check for UNSIGNED or constraint info
+            min_val = 1
+            max_val = 100000
             
-            # Apply format if provided
-            if "format" in config:
-                format_str = config["format"]
-                try:
-                    formatted_value = format_str.format(base_value)
-                    # Truncate to column max length
-                    maxlen = int(col.char_max_length) if col.char_max_length else 255
-                    return formatted_value[:maxlen]
-                except (ValueError, KeyError, IndexError) as e:
-                    # If format fails, fall back to plain value
-                    print("WARNING: Format string '{0}' failed for column {1}: {2}. Using plain value.".format(
-                        format_str, col.name, e), file=sys.stderr)
-                    return str(base_value)
+            if "price" in col_name_lower or "cost" in col_name_lower or "amount" in col_name_lower:
+                min_val = 1
+                max_val = 10000
+            elif "quantity" in col_name_lower or "count" in col_name_lower:
+                min_val = 1
+                max_val = 1000
+            elif "year" in col_name_lower:
+                min_val = 1900
+                max_val = 2030
             
-            # No format specified, return as string
-            return str(base_value)
+            return random.randint(min_val, max_val)
         
-        lname = col.name.lower()
-        if "email" in lname:
-            return rand_email(rng)
-        elif "name" in lname:
-            return rand_name(rng)
-        elif "phone" in lname:
-            return rand_phone(rng)
-        else:
-            maxlen = int(col.char_max_length) if col.char_max_length else 24
-            return rand_string(rng, min(maxlen, 24))
-    
-    # Handle enum types
-    elif dtype == "enum":
-        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
-        vals = [v.replace("''", "'") for v in m]
-        return rng.choice(vals) if vals else None
-    
-    # Handle set types
-    elif dtype == "set":
-        # Parse SET values from column_type: SET('val1','val2','val3')
-        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
-        set_values = [v.replace("''", "'") for v in m]
-        
-        if set_values:
-            # Generate random subset: select 0 to N values
-            num_values_to_select = rng.randint(0, len(set_values))
+        elif "DECIMAL" in col_type or "NUMERIC" in col_type or "FLOAT" in col_type or "DOUBLE" in col_type or "REAL" in col_type:
+            precision = col.numeric_precision or 10
+            scale = col.numeric_scale or 2
             
-            if num_values_to_select == 0:
-                return ''  # Empty set
-            else:
-                # Shuffle and select subset
-                shuffled = list(set_values)
-                rng.shuffle(shuffled)
-                selected = shuffled[:num_values_to_select]
-                
-                # Sort selected values to maintain consistent ordering
-                # (MySQL SET internally orders values by definition order)
-                # Re-sort by original position in set_values
-                selected_sorted = [v for v in set_values if v in selected]
-                return ','.join(selected_sorted)
-        return ''  # No valid SET values, use empty
-    
-    # Default: return random string for non-nullable columns
-    elif col.is_nullable == "NO":
-        return rand_string(rng, 8)
-    
-    return None
+            max_val = 10 ** (precision - scale) - 1
+            val = random.uniform(0, max_val)
+            
+            if scale:
+                return round(val, scale)
+            return val
+        
+        elif "CHAR" in col_type or "TEXT" in col_type or "VARCHAR" in col_type or "CLOB" in col_type:
+            # Check for ENUM or SET
+            if "ENUM" in col_type or "SET" in col_type:
+                m = CompiledPatterns.ENUM_PATTERN.findall(col.column_type or "")
+                if m:
+                    return random.choice(m).replace("''", "'")
+            
+            # Check for SET specifically
+            if "SET" in col_type:
+                m = CompiledPatterns.ENUM_PATTERN.findall(col.column_type or "")
+                if m:
+                    # For SET, can pick multiple values
+                    choices = [v.replace("''", "'") for v in m]
+                    num_picks = random.randint(1, min(3, len(choices)))
+                    return ",".join(random.sample(choices, num_picks))
+            
+            max_len = col.character_maximum_length or 50
+            max_len = min(max_len, 255)  # Cap for practicality
+            
+            # Generate random text
+            length = random.randint(5, max_len) if max_len > 5 else max_len
+            chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
+            return "".join(random.choice(chars) for _ in range(length)).strip()
+        
+        elif "BOOL" in col_type or "BIT(1)" in col_type:
+            return random.choice([True, False])
+        
+        elif "DATE" in col_type:
+            year = random.randint(2000, 2025)
+            month = random.randint(1, 12)
+            day = random.randint(1, 28)  # Safe for all months
+            return f"{year:04d}-{month:02d}-{day:02d}"
+        
+        elif "TIME" in col_type and "DATETIME" not in col_type and "TIMESTAMP" not in col_type:
+            hour = random.randint(0, 23)
+            minute = random.randint(0, 59)
+            second = random.randint(0, 59)
+            return f"{hour:02d}:{minute:02d}:{second:02d}"
+        
+        elif "DATETIME" in col_type or "TIMESTAMP" in col_type:
+            year = random.randint(2000, 2025)
+            month = random.randint(1, 12)
+            day = random.randint(1, 28)
+            hour = random.randint(0, 23)
+            minute = random.randint(0, 59)
+            second = random.randint(0, 59)
+            return f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+        
+        elif "BLOB" in col_type or "BINARY" in col_type or "BYTEA" in col_type:
+            # Generate random bytes
+            length = random.randint(10, 100)
+            return bytes(random.randint(0, 255) for _ in range(length))
+        
+        elif "JSON" in col_type or "JSONB" in col_type:
+            return json.dumps({"key": "value", "number": random.randint(1, 100)})
+        
+        elif "UUID" in col_type:
+            import uuid
+            return str(uuid.uuid4())
+        
+        # Fallback
+        return f"value_{random.randint(1000, 9999)}"
 
+    def generate_fk_value(self, fk: ForeignKeyConstraint, table_data: Dict[str, List[Dict]]) -> Any:
+        """
+        Generate a foreign key value by selecting from available referenced table data.
+        """
+        if fk.ref_table not in table_data or not table_data[fk.ref_table]:
+            return None  # No data to reference
+        
+        # Pick a random row from the referenced table
+        ref_row = random.choice(table_data[fk.ref_table])
+        return ref_row.get(fk.ref_column)
 
-ColumnMeta = namedtuple("ColumnMeta", ["name","data_type","is_nullable","column_type","column_key","extra","char_max_length","numeric_precision","numeric_scale","column_default"])
-FKMeta = namedtuple("FKMeta", ["constraint_name","table_schema","table_name","column_name","referenced_table_schema","referenced_table_name","referenced_column_name","is_logical","condition"])
-TableMeta = namedtuple("TableMeta", ["schema","name","columns","pk_columns","auto_increment","engine"])
-UniqueConstraint = namedtuple("UniqueConstraint", ["constraint_name","columns"])
-
-def parse_fk_condition(condition_str):
+def parse_fk_condition(condition_str: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Parse a simple FK condition like "T = 'some_string'"
-    Returns: dict with 'column', 'operator', 'value' or None if parsing fails
+    Parse a foreign key condition string like "column_name = 'ref_table.ref_column'"
+    Returns (column_name, ref_spec) where ref_spec is "ref_table.ref_column"
     """
-    if not condition_str:
-        return None
-    
-    # Simple equality check: "column = 'value'"
-    match = re.match(r"^\s*(\w+)\s*=\s*'([^']*)'\s*$", condition_str)
+    match = CompiledPatterns.FK_CONDITION_PATTERN.match(condition_str)
     if match:
-        return {
-            'column': match.group(1),
-            'operator': '=',
-            'value': match.group(2)
-        }
-    
-    # Add support for other patterns as needed
-    return None
+        return match.group(1), match.group(2)
+    return None, None
 
-def evaluate_fk_condition(condition_str, row):
+def format_value_for_sql(value: Any, col: ColumnDefinition) -> str:
     """
-    Evaluate a FK condition against a row.
-    Returns True if condition is met, False otherwise.
-    If condition is None or empty, returns True (unconditional FK).
+    Format a value for SQL INSERT statement based on column type.
     """
-    if not condition_str:
-        return True
-    
-    parsed = parse_fk_condition(condition_str)
-    if not parsed:
-        debug_print("WARNING: Could not parse condition: {0}".format(condition_str))
-        return False
-    
-    discriminator_col = parsed['column']
-    discriminator_value = row.get(discriminator_col)
-    
-    if parsed['operator'] == '=':
-        return discriminator_value == parsed['value']
-    
-    return False
-
-
-def generate_unique_value_pool(col_meta, config, needed_count, rng):
-    """
-    Generate a pool of unique values for a column based on its configuration.
-    Used to pre-allocate unique values for columns with UNIQUE constraints.
-    
-    Args:
-        col_meta: ColumnMeta object
-        config: populate_columns configuration dict with 'min'/'max', 'values', or 'format'
-        needed_count: number of unique values needed
-        rng: random number generator
-    
-    Returns:
-        List of unique values (shuffled)
-    """
-    dtype = (col_meta.data_type or "").lower()
-    
-    # If values array is specified, use it
-    if "values" in config:
-        values = config["values"]
-        if len(values) < needed_count:
-            print("WARNING: Column {0} has {1} unique values but {2} rows requested".format(
-                col_meta.name, len(values), needed_count), file=sys.stderr)
-        # Shuffle and return
-        pool = list(values)
-        rng.shuffle(pool)
-        return pool
-    
-    # For numeric types with min/max
-    if dtype in ("int", "integer", "bigint", "smallint", "tinyint", "mediumint"):
-        min_val = config.get("min", 1)
-        max_val = config.get("max", 2147483647)
-        
-        range_size = int(max_val) - int(min_val) + 1
-        if range_size < needed_count:
-            print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
-                col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
-        
-        # For large ranges, sample instead of generating all
-        if range_size > needed_count * 2 and range_size > 100000:
-            # Random sampling for large ranges
-            unique_values = set()
-            max_attempts = needed_count * 10
-            attempts = 0
-            while len(unique_values) < needed_count and attempts < max_attempts:
-                val = rng.randint(int(min_val), int(max_val))
-                unique_values.add(val)
-                attempts += 1
-            pool = list(unique_values)
-        else:
-            # Generate all possible values in range and shuffle
-            all_values = list(range(int(min_val), int(max_val) + 1))
-            rng.shuffle(all_values)
-            pool = all_values[:needed_count]
-        
-        return pool
-    
-    elif dtype in ("decimal", "numeric", "float", "double", "real"):
-        min_val = config.get("min", 0.0)
-        max_val = config.get("max", 1000000.0)
-        
-        # Use column's numeric_scale for rounding precision, default to 2
-        scale = int(col_meta.numeric_scale) if col_meta.numeric_scale else 2
-        
-        # For floats, generate random unique values
-        # Use a set to ensure uniqueness
-        unique_values = set()
-        attempts = 0
-        max_attempts = needed_count * UNIQUE_VALUE_MAX_ATTEMPTS_MULTIPLIER
-        
-        while len(unique_values) < needed_count and attempts < max_attempts:
-            val = round(rng.uniform(float(min_val), float(max_val)), scale)
-            unique_values.add(val)
-            attempts += 1
-        
-        if len(unique_values) < needed_count:
-            print("WARNING: Column {0} could only generate {1} unique float values after {2} attempts".format(
-                col_meta.name, len(unique_values), max_attempts), file=sys.stderr)
-        
-        pool = list(unique_values)
-        rng.shuffle(pool)
-        return pool
-    
-    elif dtype in ("varchar", "char", "text", "mediumtext", "longtext"):
-        # Check if min/max range is provided with optional format
-        min_val = config.get("min")
-        max_val = config.get("max")
-        
-        if min_val is not None and max_val is not None:
-            range_size = int(max_val) - int(min_val) + 1
-            if range_size < needed_count:
-                print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
-                    col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
-            
-            # For large ranges, sample instead of generating all
-            if range_size > needed_count * 2 and range_size > 100000:
-                # Random sampling for large ranges
-                unique_values = set()
-                max_attempts = needed_count * 10
-                attempts = 0
-                while len(unique_values) < needed_count and attempts < max_attempts:
-                    val = rng.randint(int(min_val), int(max_val))
-                    unique_values.add(val)
-                    attempts += 1
-                all_values = list(unique_values)
-            else:
-                # Generate all possible values in range and shuffle
-                all_values = list(range(int(min_val), int(max_val) + 1))
-                rng.shuffle(all_values)
-                all_values = all_values[:needed_count]
-            
-            # Apply format if specified
-            if "format" in config:
-                format_str = config["format"]
-                maxlen = int(col_meta.char_max_length) if col_meta.char_max_length else 255
-                
-                formatted_values = []
-                for val in all_values:
-                    try:
-                        formatted = format_str.format(val)
-                        formatted_values.append(formatted[:maxlen])
-                    except (ValueError, KeyError, IndexError):
-                        # Fallback to plain value if format fails
-                        formatted_values.append(str(val))
-                
-                rng.shuffle(formatted_values)
-                return formatted_values
-            
-            # No format specified, return as strings
-            pool = [str(val) for val in all_values]
-            rng.shuffle(pool)
-            return pool
-        
-        # For strings without values or min/max, generate random strings with guaranteed uniqueness
-        unique_values = set()
-        max_length = col_meta.char_max_length or 20
-        # Use actual max length, but cap at reasonable value for performance
-        effective_max = min(int(max_length), 50)
-        min_length = min(5, effective_max)
-        
-        attempts = 0
-        max_attempts = needed_count * UNIQUE_VALUE_MAX_ATTEMPTS_MULTIPLIER
-        
-        while len(unique_values) < needed_count and attempts < max_attempts:
-            # Generate random string
-            length = rng.randint(min_length, effective_max)
-            val = ''.join(rng.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-            unique_values.add(val)
-            attempts += 1
-        
-        pool = list(unique_values)
-        rng.shuffle(pool)
-        return pool
-    
-    elif dtype in ("date", "datetime", "timestamp"):
-        min_val = config.get("min")
-        max_val = config.get("max")
-        
-        if min_val and max_val:
-            min_date = parse_date(str(min_val))
-            max_date = parse_date(str(max_val))
-            
-            if min_date and max_date:
-                delta_days = (max_date - min_date).days
-                
-                if delta_days < needed_count:
-                    print("WARNING: Column {0} date range has only {1} days but {2} rows requested".format(
-                        col_meta.name, delta_days + 1, needed_count), file=sys.stderr)
-                
-                # Generate unique dates
-                if delta_days + 1 > needed_count * 2 and delta_days + 1 > 100000:
-                    # Random sampling for large date ranges
-                    unique_days = set()
-                    max_attempts = needed_count * 10
-                    attempts = 0
-                    while len(unique_days) < needed_count and attempts < max_attempts:
-                        day_offset = rng.randint(0, delta_days)
-                        unique_days.add(day_offset)
-                        attempts += 1
-                    day_offsets = list(unique_days)
-                else:
-                    all_days = list(range(delta_days + 1))
-                    rng.shuffle(all_days)
-                    day_offsets = all_days[:needed_count]
-                
-                unique_dates = []
-                for day_offset in day_offsets:
-                    date_val = min_date + timedelta(days=day_offset)
-                    
-                    if dtype == "date":
-                        unique_dates.append(date_val.strftime("%Y-%m-%d"))
-                    else:
-                        # Add random time for datetime/timestamp to ensure uniqueness
-                        random_seconds = rng.randint(0, 86399)
-                        datetime_val = date_val + timedelta(seconds=random_seconds)
-                        unique_dates.append(datetime_val.strftime("%Y-%m-%d %H:%M:%S"))
-                
-                return unique_dates
-    
-    # Fallback: return empty pool
-    return []
-
-
-def validate_set_value(set_definition, value):
-    """
-    Validate that a SET value is valid according to the column definition.
-    
-    Args:
-        set_definition: The COLUMN_TYPE string, e.g., "set('a','b','c')"
-        value: The value to validate, e.g., "a,c"
-    
-    Returns:
-        bool: True if valid
-    """
-    if value is None or value == '':  # Empty string is valid
-        return True
-    
-    # Parse allowed values
-    m = re.findall(r"'((?:[^']|(?:''))*)'", set_definition or "")
-    allowed_values = {v.replace("''", "'") for v in m}
-    
-    # Parse provided value
-    provided_values = [v.strip() for v in str(value).split(',')]
-    
-    # Check all provided values are in allowed set
-    for pv in provided_values:
-        if pv not in allowed_values:
-            return False
-    
-    return True
-
-
-def sql_literal(value):
     if value is None:
         return "NULL"
-    if isinstance(value, str):
-        if value.startswith("@") and re.match(r"^@[0-9A-Za-z_]+$", value):
-            return value
-        return "'" + value.replace("'", "''") + "'"
-    return str(value)
-
-def render_insert_statement(schema, table, colnames, rows_values, multirow=True, max_rows_per_statement=1000):
-    """Render INSERT with configurable batch size to avoid max_allowed_packet"""
-    if not rows_values:
-        return ""
-    cols = ",".join("`{0}`".format(c) for c in colnames)
     
-    if multirow and len(rows_values) > 1:
-        statements = []
-        for i in range(0, len(rows_values), max_rows_per_statement):
-            chunk = rows_values[i:i+max_rows_per_statement]
-            vals = ["(" + ",".join(sql_literal(v) for v in rv) + ")" for rv in chunk]
-            statements.append("INSERT INTO `{0}`. `{1}` ({2}) VALUES\n{3};\n".format(
-                schema, table, cols, ",\n".join(vals)))
-        return "".join(statements)
+    col_type = col.column_type.upper()
+    
+    # String types
+    if any(t in col_type for t in ["CHAR", "TEXT", "VARCHAR", "CLOB", "ENUM", "SET", "DATE", "TIME", "UUID"]):
+        # Escape single quotes
+        escaped = str(value).replace("'", "''")
+        return f"'{escaped}'"
+    
+    # Binary types
+    elif any(t in col_type for t in ["BLOB", "BINARY", "BYTEA"]):
+        if isinstance(value, bytes):
+            # Convert to hex string
+            return f"X'{value.hex()}'"
+        return f"'{value}'"
+    
+    # JSON types
+    elif "JSON" in col_type:
+        escaped = json.dumps(value).replace("'", "''")
+        return f"'{escaped}'"
+    
+    # Boolean types
+    elif "BOOL" in col_type or "BIT(1)" in col_type:
+        return "TRUE" if value else "FALSE"
+    
+    # Numeric types - return as-is
     else:
-        stmts = []
-        for rv in rows_values:
-            vals = "(" + ",".join(sql_literal(v) for v in rv) + ")"
-            stmts.append("INSERT INTO `{0}`.`{1}` ({2}) VALUES {3};".format(schema, table, cols, vals))
-        return "\n".join(stmts) + "\n"
+        return str(value)
+
+def generate_insert_statements(table_def: TableDefinition, num_rows: int, 
+                               table_data: Dict[str, List[Dict]] = None,
+                               generator: DataGenerator = None) -> List[str]:
+    """
+    Generate INSERT statements for a table.
+    
+    Args:
+        table_def: Table definition
+        num_rows: Number of rows to generate
+        table_data: Existing table data for FK resolution (dict: table_name -> list of row dicts)
+        generator: DataGenerator instance to use
+    
+    Returns:
+        List of SQL INSERT statements
+    """
+    if generator is None:
+        generator = DataGenerator()
+    
+    if table_data is None:
+        table_data = {}
+    
+    statements = []
+    rows_data = []  # Store generated rows for this table
+    
+    for _ in range(num_rows):
+        row = {}
+        values = []
+        
+        # Generate values for each column
+        for col in table_def.columns:
+            # Skip auto-increment columns
+            if col.is_auto_increment:
+                continue
+            
+            # Check if this column is a foreign key
+            fk = None
+            for fk_constraint in table_def.foreign_keys:
+                if fk_constraint.column_name == col.name:
+                    fk = fk_constraint
+                    break
+            
+            if fk:
+                value = generator.generate_fk_value(fk, table_data)
+            else:
+                value = generator.generate_value_for_column(col, table_data)
+            
+            row[col.name] = value
+            values.append(format_value_for_sql(value, col))
+        
+        # Build INSERT statement
+        col_names = [col.name for col in table_def.columns if not col.is_auto_increment]
+        cols_str = ", ".join(col_names)
+        vals_str = ", ".join(values)
+        
+        statement = f"INSERT INTO {table_def.schema}.{table_def.name} ({cols_str}) VALUES ({vals_str});"
+        statements.append(statement)
+        rows_data.append(row)
+    
+    # Store generated data for this table
+    if table_def.name not in table_data:
+        table_data[table_def.name] = []
+    table_data[table_def.name].extend(rows_data)
+    
+    return statements
+
+def escape_sql_string(value: str) -> str:
+    """Escape a string for use in SQL."""
+    return value.replace("'", "''").replace("\\", "\\\\")
+
+def parse_default_value(default_str: Optional[str]) -> Optional[str]:
+    """
+    Parse a default value expression from schema.
+    Returns None if it's NULL, CURRENT_TIMESTAMP, or other special values.
+    """
+    if not default_str:
+        return None
+    
+    default_upper = default_str.upper().strip()
+    
+    if default_upper in ("NULL", "CURRENT_TIMESTAMP", "NOW()", "GETDATE()"):
+        return None
+    
+    # Remove surrounding quotes if present
+    if (default_str.startswith("'") and default_str.endswith("'")) or \
+       (default_str.startswith('"') and default_str.endswith('"')):
+        return default_str[1:-1]
+    
+    return default_str
+
+def validate_generated_data(row_data: Dict[str, Any], table_def: TableDefinition) -> Tuple[bool, Optional[str]]:
+    """
+    Validate that generated row data meets basic constraints.
+    
+    Returns:
+        (is_valid, error_message)
+    """
+    for col in table_def.columns:
+        value = row_data.get(col.name)
+        
+        # Check NOT NULL constraint
+        if not col.is_nullable and value is None and not col.is_auto_increment:
+            return False, f"Column {col.name} cannot be NULL"
+        
+        # Check string length
+        if col.character_maximum_length and isinstance(value, str):
+            if len(value) > col.character_maximum_length:
+                return False, f"Column {col.name} exceeds max length {col.character_maximum_length}"
+        
+        # Check numeric precision (basic)
+        if col.numeric_precision and isinstance(value, (int, float, Decimal)):
+            try:
+                if isinstance(value, float):
+                    value = Decimal(str(value))
+                # This is a simplified check
+                str_val = str(value).replace(".", "").replace("-", "")
+                if len(str_val) > col.numeric_precision:
+                    return False, f"Column {col.name} exceeds numeric precision {col.numeric_precision}"
+            except (InvalidOperation, ValueError):
+                pass
+    
+    return True, None
+
+def parse_enum_or_set_values(type_definition: str) -> List[str]:
+    """
+    Parse ENUM or SET type definition to extract allowed values.
+    Example: "ENUM('value1','value2','value3')" -> ["value1", "value2", "value3"]
+    """
+    m = CompiledPatterns.ENUM_PATTERN.findall(set_definition or "")
+    return [v.replace("''", "'") for v in m]
+
+def calculate_data_size(value: Any) -> int:
+    """
+    Estimate the size in bytes of a data value.
+    """
+    if value is None:
+        return 0
+    elif isinstance(value, bool):
+        return 1
+    elif isinstance(value, int):
+        return 8
+    elif isinstance(value, float):
+        return 8
+    elif isinstance(value, str):
+        return len(value.encode('utf-8'))
+    elif isinstance(value, bytes):
+        return len(value)
+    elif isinstance(value, (list, dict)):
+        return len(json.dumps(value).encode('utf-8'))
+    else:
+        return len(str(value).encode('utf-8'))
+
+def is_user_variable(value: str) -> bool:
+    """Check if a value is a user variable (starts with @)."""
+    if value.startswith("@") and CompiledPatterns.USER_VAR_PATTERN.match(value):
+        return True
+    return False
+
+def generate_batch_inserts(table_def: TableDefinition, num_rows: int,
+                           batch_size: int = 1000,
+                           table_data: Dict[str, List[Dict]] = None,
+                           generator: DataGenerator = None) -> List[str]:
+    """
+    Generate batch INSERT statements (multi-row inserts) for better performance.
+    
+    Args:
+        table_def: Table definition
+        num_rows: Total number of rows to generate
+        batch_size: Number of rows per INSERT statement
+        table_data: Existing table data for FK resolution
+        generator: DataGenerator instance to use
+    
+    Returns:
+        List of batch SQL INSERT statements
+    """
+    if generator is None:
+        generator = DataGenerator()
+    
+    if table_data is None:
+        table_data = {}
+    
+    statements = []
+    rows_data = []
+    
+    col_names = [col.name for col in table_def.columns if not col.is_auto_increment]
+    cols_str = ", ".join(col_names)
+    
+    batch_values = []
+    
+    for i in range(num_rows):
+        row = {}
+        values = []
+        
+        for col in table_def.columns:
+            if col.is_auto_increment:
+                continue
+            
+            # Check for FK
+            fk = None
+            for fk_constraint in table_def.foreign_keys:
+                if fk_constraint.column_name == col.name:
+                    fk = fk_constraint
+                    break
+            
+            if fk:
+                value = generator.generate_fk_value(fk, table_data)
+            else:
+                value = generator.generate_value_for_column(col, table_data)
+            
+            row[col.name] = value
+            values.append(format_value_for_sql(value, col))
+        
+        batch_values.append(f"({', '.join(values)})")
+        rows_data.append(row)
+        
+        # Create batch insert when batch is full or at the end
+        if len(batch_values) >= batch_size or i == num_rows - 1:
+            values_str = ",\n  ".join(batch_values)
+            statement = f"INSERT INTO {table_def.schema}.{table_def.name} ({cols_str})\nVALUES\n  {values_str};"
+            statements.append(statement)
+            batch_values = []
+    
+    # Store generated data
+    if table_def.name not in table_data:
+        table_data[table_def.name] = []
+    table_data[table_def.name].extend(rows_data)
+    
+    return statements
