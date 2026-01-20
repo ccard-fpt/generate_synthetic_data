@@ -49,7 +49,7 @@ def cartesian_product_generator(value_lists):
         Generator of tuples representing combinations
     """
     if not value_lists:
-        return iter([])
+        return iter(())
     return itertools.product(*value_lists)
 
 
@@ -80,8 +80,8 @@ class ThreadLocalCounter:
         Returns:
             Next counter value
         """
-        # Check if thread has local state
-        if not hasattr(self.local, 'batch_start'):
+        # Check if thread has local state (use getattr for better performance)
+        if getattr(self.local, 'batch_start', None) is None:
             self._allocate_batch()
         
         # Use local counter
