@@ -11,7 +11,7 @@ class CompiledPatterns:
     """
     
     # Column name detection patterns
-    AGE_PATTERN = re.compile(r"age|years?", re.I)
+    AGE_PATTERN = re.compile(r"age|years? ", re.I)
     
     # SQL parsing patterns for ENUM/SET extraction
     ENUM_PATTERN = re.compile(r"'((?:[^']|(?:''))*)'")
