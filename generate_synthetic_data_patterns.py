@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Pre-compiled regex patterns and performance optimization utilities"""
+"""Pre-compiled regex patterns and performance optimization utilities
+
+Python 3.6.8+ Compatible
+All features used in this module are compatible with Python 3.6.8:
+- dict.fromkeys() for ordered deduplication (Python 2.2+)
+- threading.local() for thread-local storage (Python 2.4+)
+- itertools.product() for cartesian products (Python 2.6+)
+- Context managers (with statement) (Python 2.5+)
+- re.compile() for regex pre-compilation (Python 1.5+)
+"""
 import re
 import itertools
 import threading
