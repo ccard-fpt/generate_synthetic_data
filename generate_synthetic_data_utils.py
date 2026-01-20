@@ -3,6 +3,7 @@
 import hashlib, hmac, re, random, sys
 from datetime import datetime, timedelta
 from collections import namedtuple
+from generate_synthetic_data_patterns import CompiledPatterns
 
 GLOBALS = {"debug": False}
 
@@ -224,7 +225,7 @@ def generate_value_with_config(rng, col, config=None):
             debug_print("Column {0}: Using int range [{1}, {2}]".format(col.name, min_val, max_val))
             return rng.randint(int(min_val), int(max_val))
         # Default integer generation
-        if re.search(r"age|years? ", col.name, re.I):
+        if CompiledPatterns.AGE_PATTERN.search(col.name):
             return rng.randint(18, 80)
         return rng.randint(0, 10000)
     
@@ -295,14 +296,14 @@ def generate_value_with_config(rng, col, config=None):
     
     # Handle enum types
     elif dtype == "enum":
-        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
+        m = CompiledPatterns.ENUM_PATTERN.findall(col.column_type or "")
         vals = [v.replace("''", "'") for v in m]
         return rng.choice(vals) if vals else None
     
     # Handle set types
     elif dtype == "set":
         # Parse SET values from column_type: SET('val1','val2','val3')
-        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
+        m = CompiledPatterns.ENUM_PATTERN.findall(col.column_type or "")
         set_values = [v.replace("''", "'") for v in m]
         
         if set_values:
@@ -596,7 +597,7 @@ def validate_set_value(set_definition, value):
         return True
     
     # Parse allowed values
-    m = re.findall(r"'((?:[^']|(?:''))*)'", set_definition or "")
+    m = CompiledPatterns.ENUM_PATTERN.findall(set_definition or "")
     allowed_values = {v.replace("''", "'") for v in m}
     
     # Parse provided value
