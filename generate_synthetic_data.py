@@ -14,6 +14,7 @@ except ImportError:
     sys.exit(1)
 
 from generate_synthetic_data_utils import *
+from generate_synthetic_data_patterns import unique_list
 
 def build_dependency_graph(config_tables, fk_list, composite_logical_fks=None):
     nodes = set("{0}.{1}".format(t['schema'], t['table']) for t in config_tables)
@@ -843,7 +844,7 @@ class FastSyntheticGenerator:
                     all_parent_vals.extend(cached_vals)
                 if all_parent_vals:
                     # Use unique values for Cartesian product
-                    parent_caches[fk_col] = list(set(all_parent_vals))
+                    parent_caches[fk_col] = unique_list(all_parent_vals)
                     debug_print("{0}: Conditional FK column {1} has {2} total unique parent values from {3} tables".format(
                         node, fk_col, len(parent_caches[fk_col]), len(fk_list)))
         
@@ -882,7 +883,7 @@ class FastSyntheticGenerator:
                 # Single-column PK that is also an FK - existing logic
                 pk_col = tmeta.pk_columns[0]
                 parent_vals = parent_caches.get(pk_col, [])
-                unique_parent_vals = list(set(parent_vals))
+                unique_parent_vals = unique_list(parent_vals)
                 
                 if len(unique_parent_vals) < len(rows):
                     print("WARNING: {0} needs {1} rows but parent only has {2} unique values for PK-FK column {3}".format(
@@ -922,7 +923,7 @@ class FastSyntheticGenerator:
                     pool_sizes = []
                     for pk_col in ordered_single_fk_pk_cols:
                         parent_vals = parent_caches.get(pk_col, [])
-                        unique_vals = list(set(parent_vals))
+                        unique_vals = unique_list(parent_vals)
                         
                         debug_print("{0}: PK-FK column {1} has {2} parent values, {3} unique".format(
                             node, pk_col, len(parent_vals), len(unique_vals)))
@@ -1252,7 +1253,7 @@ class FastSyntheticGenerator:
                             if parent_node in self.generated_rows:
                                 parent_rows = self.generated_rows[parent_node]
                                 parent_vals = [r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]
-                                non_shared_value_lists[col_name] = list(set(parent_vals))
+                                non_shared_value_lists[col_name] = unique_list(parent_vals)
                             else:
                                 print("ERROR: {0}: Parent table {1} not generated yet for FK column {2}".format(
                                     node, parent_node, col_name), file=sys.stderr)
@@ -1284,7 +1285,7 @@ class FastSyntheticGenerator:
                         
                         if parent_node in self.generated_rows:
                             parent_rows = self.generated_rows[parent_node]
-                            shared_values = list(set([r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]))
+                            shared_values = unique_list([r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None])
                     else:
                         # Shared column has explicit config values
                         populate_config = self.populate_columns_config.get(node, {})
@@ -1550,7 +1551,7 @@ class FastSyntheticGenerator:
                         if parent_node in self.generated_rows:
                             parent_rows = self.generated_rows[parent_node]
                             parent_vals = [r.get(parent_col) for r in parent_rows if r and r.get(parent_col) is not None]
-                            parent_vals = list(set(parent_vals))  # Get unique values
+                            parent_vals = unique_list(parent_vals)  # Get unique values
                         
                         if not parent_vals:
                             print("ERROR: No parent values found for FK {0} -> {1}.{2}".format(
