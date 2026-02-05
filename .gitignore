@@ -16,3 +16,9 @@ venv/
 .idea/
 .vscode/
 *.swp
+
+# RPM build artifacts
+*.tar.gz
+*.rpm
+*.src.rpm
+rpmbuild/

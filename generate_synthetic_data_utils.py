@@ -3,11 +3,18 @@
 import hashlib, hmac, re, random, sys
 from datetime import datetime, timedelta
 from collections import namedtuple
+from generate_synthetic_data_patterns import CompiledPatterns
 
-GLOBALS = {"debug": False}
+GLOBALS = {"debug": False, "debug_level": 0}
 
 # Maximum attempt multiplier for generating unique values (used in generate_unique_value_pool)
 UNIQUE_VALUE_MAX_ATTEMPTS_MULTIPLIER = 10
+
+# Debug level constants
+DEBUG_LEVEL_NONE = 0      # No debug output
+DEBUG_LEVEL_HIGH = 1      # High-level operations (table generation, major steps)
+DEBUG_LEVEL_MEDIUM = 2    # Medium detail (constraint analysis, FK processing)
+DEBUG_LEVEL_VERBOSE = 3   # Full verbose output (individual operations, pool usage)
 
 
 def parse_date(date_str):
@@ -130,9 +137,23 @@ def validate_populate_column_config(col_meta, config):
     
     return True
 
-def debug_print(*args, **kwargs):
-    if GLOBALS["debug"]:
-        print("[DEBUG]", *args, **kwargs)
+def debug_print(*args, level=1, **kwargs):
+    """
+    Print debug message with timestamp if debug level is sufficient.
+    
+    Args:
+        *args: Message arguments to print
+        level: Minimum debug level required (1=high, 2=medium, 3=verbose)
+        **kwargs: Additional arguments passed to print()
+    """
+    # Support legacy boolean debug flag
+    if GLOBALS["debug"] and GLOBALS.get("debug_level", 0) == 0:
+        GLOBALS["debug_level"] = 1
+    
+    if GLOBALS.get("debug_level", 0) >= level:
+        # Add timestamp with milliseconds
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        print("[DEBUG {0}]".format(timestamp), *args, **kwargs)
 
 def slugify(s):
     return re.sub(r"[^0-9a-zA-Z_]+", "_", s or "")
@@ -224,7 +245,7 @@ def generate_value_with_config(rng, col, config=None):
             debug_print("Column {0}: Using int range [{1}, {2}]".format(col.name, min_val, max_val))
             return rng.randint(int(min_val), int(max_val))
         # Default integer generation
-        if re.search(r"age|years? ", col.name, re.I):
+        if CompiledPatterns.AGE_PATTERN.search(col.name):
             return rng.randint(18, 80)
         return rng.randint(0, 10000)
     
@@ -295,14 +316,14 @@ def generate_value_with_config(rng, col, config=None):
     
     # Handle enum types
     elif dtype == "enum":
-        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
+        m = CompiledPatterns.ENUM_PATTERN.findall(col.column_type or "")
         vals = [v.replace("''", "'") for v in m]
         return rng.choice(vals) if vals else None
     
     # Handle set types
     elif dtype == "set":
         # Parse SET values from column_type: SET('val1','val2','val3')
-        m = re.findall(r"'((?:[^']|(?:''))*)'", col.column_type or "")
+        m = CompiledPatterns.ENUM_PATTERN.findall(col.column_type or "")
         set_values = [v.replace("''", "'") for v in m]
         
         if set_values:
@@ -596,7 +617,7 @@ def validate_set_value(set_definition, value):
         return True
     
     # Parse allowed values
-    m = re.findall(r"'((?:[^']|(?:''))*)'", set_definition or "")
+    m = CompiledPatterns.ENUM_PATTERN.findall(set_definition or "")
     allowed_values = {v.replace("''", "'") for v in m}
     
     # Parse provided value
