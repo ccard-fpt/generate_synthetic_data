@@ -204,7 +204,7 @@ class ConstraintResolver(object):
         selected_uc, min_combos = constraint_combos[0]
         
         # Log decision
-        debug_print("{0}: Multiple composite UNIQUE constraints found:".format(table_key))
+        debug_print("{0}: Multiple composite UNIQUE constraints found:".format(table_key), level=2)
         
         for uc, combo_count in constraint_combos:
             marker = "✓ SELECTED" if uc == selected_uc else ""

@@ -5,10 +5,16 @@ from datetime import datetime, timedelta
 from collections import namedtuple
 from generate_synthetic_data_patterns import CompiledPatterns
 
-GLOBALS = {"debug": False}
+GLOBALS = {"debug": False, "debug_level": 0}
 
 # Maximum attempt multiplier for generating unique values (used in generate_unique_value_pool)
 UNIQUE_VALUE_MAX_ATTEMPTS_MULTIPLIER = 10
+
+# Debug level constants
+DEBUG_LEVEL_NONE = 0      # No debug output
+DEBUG_LEVEL_HIGH = 1      # High-level operations (table generation, major steps)
+DEBUG_LEVEL_MEDIUM = 2    # Medium detail (constraint analysis, FK processing)
+DEBUG_LEVEL_VERBOSE = 3   # Full verbose output (individual operations, pool usage)
 
 
 def parse_date(date_str):
@@ -131,8 +137,20 @@ def validate_populate_column_config(col_meta, config):
     
     return True
 
-def debug_print(*args, **kwargs):
-    if GLOBALS["debug"]:
+def debug_print(*args, level=1, **kwargs):
+    """
+    Print debug message if debug level is sufficient.
+    
+    Args:
+        *args: Message arguments to print
+        level: Minimum debug level required (1=high, 2=medium, 3=verbose)
+        **kwargs: Additional arguments passed to print()
+    """
+    # Support legacy boolean debug flag
+    if GLOBALS["debug"] and GLOBALS.get("debug_level", 0) == 0:
+        GLOBALS["debug_level"] = 1
+    
+    if GLOBALS.get("debug_level", 0) >= level:
         print("[DEBUG]", *args, **kwargs)
 
 def slugify(s):
