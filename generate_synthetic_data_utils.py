@@ -231,7 +231,7 @@ def generate_value_with_config(rng, col, config=None):
     
     # Check if specific values are provided
     if "values" in config:
-        debug_print("Column {0}: Using values list {1}".format(col.name, config["values"]))
+        debug_print("Column {0}: Using values list {1}".format(col.name, config["values"]), level=3)
         return rng.choice(config["values"])
     
     # Check for min/max range
@@ -242,7 +242,7 @@ def generate_value_with_config(rng, col, config=None):
     # Handle integer types with ranges
     if "int" in dtype or dtype in ("bigint", "smallint", "mediumint", "tinyint"):
         if has_range:
-            debug_print("Column {0}: Using int range [{1}, {2}]".format(col.name, min_val, max_val))
+            debug_print("Column {0}: Using int range [{1}, {2}]".format(col.name, min_val, max_val), level=3)
             return rng.randint(int(min_val), int(max_val))
         # Default integer generation
         if CompiledPatterns.AGE_PATTERN.search(col.name):
@@ -252,7 +252,7 @@ def generate_value_with_config(rng, col, config=None):
     # Handle decimal/float types with ranges
     elif dtype in ("decimal", "numeric", "float", "double", "real"):
         if has_range:
-            debug_print("Column {0}: Using decimal range [{1}, {2}]".format(col.name, min_val, max_val))
+            debug_print("Column {0}: Using decimal range [{1}, {2}]".format(col.name, min_val, max_val), level=3)
             return round(rng.uniform(float(min_val), float(max_val)), 2)
         # Default decimal generation
         prec = int(col.numeric_precision or 10)
@@ -265,7 +265,7 @@ def generate_value_with_config(rng, col, config=None):
             min_date = parse_date(str(min_val))
             max_date = parse_date(str(max_val))
             if min_date and max_date:
-                debug_print("Column {0}: Using date range [{1}, {2}]".format(col.name, min_val, max_val))
+                debug_print("Column {0}: Using date range [{1}, {2}]".format(col.name, min_val, max_val), level=3)
                 delta = max_date - min_date
                 random_days = rng.randint(0, max(0, delta.days))
                 random_date = min_date + timedelta(days=random_days)
