@@ -593,7 +593,7 @@ class TestGenerateValueWithConfig(unittest.TestCase):
             self.assertGreaterEqual(first_num, 100)
             self.assertLessEqual(first_num, 200)
             
-            # Second and third should be single digits
+            # Second and third should be in range 0-9
             second_num = int(parts[1])
             self.assertGreaterEqual(second_num, 0)
             self.assertLessEqual(second_num, 9)

@@ -571,7 +571,7 @@ def generate_unique_value_pool(col_meta, config, needed_count, rng):
                     variation_counter = 0
                     for val in all_values:
                         try:
-                            # Create format values: first is base_value, rest are variation counters
+                            # Create format values: first is val (from range), rest are variation counters
                             format_values = [val]
                             # Use the variation counter divided by powers to fill additional placeholders
                             temp_counter = variation_counter
