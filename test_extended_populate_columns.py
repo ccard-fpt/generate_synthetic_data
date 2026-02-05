@@ -529,6 +529,151 @@ class TestGenerateValueWithConfig(unittest.TestCase):
             self.assertIsInstance(value, str)
             # Should be truncated to 10 chars
             self.assertLessEqual(len(value), 10)
+    
+    def test_generate_varchar_with_two_placeholders(self):
+        """Test generating varchar with two placeholders for uniqueness"""
+        col = self._make_column("filename", "varchar")
+        config = {
+            "column": "filename",
+            "min": 1754928466,
+            "max": 1764928466,
+            "format": "hosted_agg01lgw_1_192.168.0.1_{:10d}_{:1d}.gz.enc"
+        }
+        
+        # Generate multiple values and check they're formatted correctly
+        values = set()
+        for _ in range(100):
+            value = generate_value_with_config(self.rng, col, config)
+            self.assertIsInstance(value, str)
+            self.assertTrue(value.startswith("hosted_agg01lgw_1_192.168.0.1_"))
+            self.assertTrue(value.endswith(".gz.enc"))
+            
+            # Extract the two numeric parts
+            parts = value.replace("hosted_agg01lgw_1_192.168.0.1_", "").replace(".gz.enc", "").split("_")
+            self.assertEqual(len(parts), 2)
+            
+            # First placeholder should be in the specified range
+            first_num = int(parts[0])
+            self.assertGreaterEqual(first_num, 1754928466)
+            self.assertLessEqual(first_num, 1764928466)
+            
+            # Second placeholder should be a single digit (0-9)
+            second_num = int(parts[1])
+            self.assertGreaterEqual(second_num, 0)
+            self.assertLessEqual(second_num, 9)
+            
+            values.add(value)
+        
+        # With two placeholders, we should get many unique values
+        self.assertGreater(len(values), 50, "Should generate diverse unique values with two placeholders")
+    
+    def test_generate_varchar_with_three_placeholders(self):
+        """Test generating varchar with three placeholders"""
+        col = self._make_column("code", "varchar")
+        config = {
+            "column": "code",
+            "min": 100,
+            "max": 200,
+            "format": "CODE_{:03d}_{:02d}_{:01d}"
+        }
+        
+        # Generate multiple values
+        values = set()
+        for _ in range(50):
+            value = generate_value_with_config(self.rng, col, config)
+            self.assertIsInstance(value, str)
+            self.assertTrue(value.startswith("CODE_"))
+            
+            # Extract the three numeric parts
+            parts = value.replace("CODE_", "").split("_")
+            self.assertEqual(len(parts), 3)
+            
+            # First placeholder should be in range
+            first_num = int(parts[0])
+            self.assertGreaterEqual(first_num, 100)
+            self.assertLessEqual(first_num, 200)
+            
+            # Second and third should be in range 0-9
+            second_num = int(parts[1])
+            self.assertGreaterEqual(second_num, 0)
+            self.assertLessEqual(second_num, 9)
+            
+            third_num = int(parts[2])
+            self.assertGreaterEqual(third_num, 0)
+            self.assertLessEqual(third_num, 9)
+            
+            values.add(value)
+        
+        # Should get many unique values
+        self.assertGreater(len(values), 40, "Should generate diverse unique values with three placeholders")
+    
+    def test_generate_varchar_with_custom_format_ranges(self):
+        """Test custom format_ranges for each placeholder"""
+        col = self._make_column("code", "varchar")
+        config = {
+            "column": "code",
+            "min": 100,
+            "max": 200,
+            "format": "CODE_{:d}_{:d}",
+            "format_ranges": [[100, 200], [50, 99]]
+        }
+        
+        # Generate multiple values
+        values = set()
+        first_values = set()
+        second_values = set()
+        
+        for _ in range(100):
+            value = generate_value_with_config(self.rng, col, config)
+            self.assertIsInstance(value, str)
+            self.assertTrue(value.startswith("CODE_"))
+            
+            # Extract the two numeric parts
+            parts = value.split("_")
+            self.assertEqual(len(parts), 3)
+            
+            # First placeholder should be in custom range [100, 200]
+            first_num = int(parts[1])
+            self.assertGreaterEqual(first_num, 100)
+            self.assertLessEqual(first_num, 200)
+            first_values.add(first_num)
+            
+            # Second placeholder should be in custom range [50, 99]
+            second_num = int(parts[2])
+            self.assertGreaterEqual(second_num, 50)
+            self.assertLessEqual(second_num, 99)
+            second_values.add(second_num)
+            
+            values.add(value)
+        
+        # Should get many unique values with custom ranges
+        self.assertGreater(len(values), 50, "Should generate diverse unique values with custom ranges")
+        # Verify custom ranges are being used
+        self.assertTrue(any(v >= 100 for v in first_values), "First placeholder should use custom range")
+        self.assertTrue(any(v >= 50 for v in second_values), "Second placeholder should use custom range")
+    
+    def test_generate_varchar_with_partial_format_ranges(self):
+        """Test with format_ranges specified only for first placeholder"""
+        col = self._make_column("code", "varchar")
+        config = {
+            "column": "code",
+            "min": 10,
+            "max": 20,
+            "format": "CODE_{:d}_{:d}",
+            "format_ranges": [[10, 20]]  # Only first placeholder specified
+        }
+        
+        # Generate values
+        second_values = set()
+        for _ in range(30):
+            value = generate_value_with_config(self.rng, col, config)
+            parts = value.split("_")
+            if len(parts) >= 3:
+                second_values.add(int(parts[2]))
+        
+        # Second placeholder should use default 0-9 range
+        self.assertTrue(all(0 <= v <= 9 for v in second_values), 
+                       "Second placeholder should use default 0-9 range when not in format_ranges")
 
 
 class TestBackwardCompatibility(unittest.TestCase):

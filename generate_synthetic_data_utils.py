@@ -17,6 +17,19 @@ DEBUG_LEVEL_MEDIUM = 2    # Medium detail (constraint analysis, FK processing)
 DEBUG_LEVEL_VERBOSE = 3   # Full verbose output (individual operations, pool usage)
 
 
+def count_format_placeholders(format_str):
+    """
+    Count the number of placeholders in a format string.
+    
+    Args:
+        format_str: Format string like "prefix_{:08d}_{:02d}_suffix"
+    
+    Returns:
+        Number of placeholders (e.g., 2 for the example above)
+    """
+    return len(re.findall(r'\{[^}]*\}', format_str))
+
+
 def parse_date(date_str):
     """
     Parse date string in various formats.
@@ -88,9 +101,15 @@ def validate_populate_column_config(col_meta, config):
             print("WARNING: format string '{0}' for column {1} has no placeholders".format(
                 format_str, col_meta.name), file=sys.stderr)
         else:
-            # Test the format string with a sample value
+            # Test the format string with sample values
+            num_placeholders = count_format_placeholders(format_str)
             try:
-                format_str.format(1)
+                if num_placeholders == 1:
+                    format_str.format(1)
+                elif num_placeholders > 1:
+                    # Test with multiple values (1, 0, 0, ...)
+                    test_values = [1] + [0] * (num_placeholders - 1)
+                    format_str.format(*test_values)
             except (ValueError, KeyError, IndexError) as e:
                 print("WARNING: format string '{0}' for column {1} is invalid: {2}".format(
                     format_str, col_meta.name, e), file=sys.stderr)
@@ -231,7 +250,7 @@ def generate_value_with_config(rng, col, config=None):
     
     # Check if specific values are provided
     if "values" in config:
-        debug_print("Column {0}: Using values list {1}".format(col.name, config["values"]))
+        debug_print("Column {0}: Using values list {1}".format(col.name, config["values"]), level=3)
         return rng.choice(config["values"])
     
     # Check for min/max range
@@ -242,7 +261,7 @@ def generate_value_with_config(rng, col, config=None):
     # Handle integer types with ranges
     if "int" in dtype or dtype in ("bigint", "smallint", "mediumint", "tinyint"):
         if has_range:
-            debug_print("Column {0}: Using int range [{1}, {2}]".format(col.name, min_val, max_val))
+            debug_print("Column {0}: Using int range [{1}, {2}]".format(col.name, min_val, max_val), level=3)
             return rng.randint(int(min_val), int(max_val))
         # Default integer generation
         if CompiledPatterns.AGE_PATTERN.search(col.name):
@@ -252,7 +271,7 @@ def generate_value_with_config(rng, col, config=None):
     # Handle decimal/float types with ranges
     elif dtype in ("decimal", "numeric", "float", "double", "real"):
         if has_range:
-            debug_print("Column {0}: Using decimal range [{1}, {2}]".format(col.name, min_val, max_val))
+            debug_print("Column {0}: Using decimal range [{1}, {2}]".format(col.name, min_val, max_val), level=3)
             return round(rng.uniform(float(min_val), float(max_val)), 2)
         # Default decimal generation
         prec = int(col.numeric_precision or 10)
@@ -265,7 +284,7 @@ def generate_value_with_config(rng, col, config=None):
             min_date = parse_date(str(min_val))
             max_date = parse_date(str(max_val))
             if min_date and max_date:
-                debug_print("Column {0}: Using date range [{1}, {2}]".format(col.name, min_val, max_val))
+                debug_print("Column {0}: Using date range [{1}, {2}]".format(col.name, min_val, max_val), level=3)
                 delta = max_date - min_date
                 random_days = rng.randint(0, max(0, delta.days))
                 random_date = min_date + timedelta(days=random_days)
@@ -290,7 +309,38 @@ def generate_value_with_config(rng, col, config=None):
             if "format" in config:
                 format_str = config["format"]
                 try:
-                    formatted_value = format_str.format(base_value)
+                    # Count placeholders to support multiple format arguments
+                    num_placeholders = count_format_placeholders(format_str)
+                    
+                    if num_placeholders == 1:
+                        # Single placeholder: use base_value directly (backward compatible)
+                        formatted_value = format_str.format(base_value)
+                    elif num_placeholders > 1:
+                        # Multiple placeholders: first uses base_value, rest use custom or default ranges
+                        format_values = [base_value]
+                        
+                        # Check if custom ranges are specified for placeholders
+                        format_ranges = config.get("format_ranges", None)
+                        
+                        for i in range(1, num_placeholders):
+                            # Use custom range if provided, otherwise default to 0-9
+                            if format_ranges and isinstance(format_ranges, list) and len(format_ranges) > i:
+                                range_spec = format_ranges[i]
+                                if isinstance(range_spec, list) and len(range_spec) == 2:
+                                    range_min, range_max = range_spec
+                                    format_values.append(rng.randint(int(range_min), int(range_max)))
+                                else:
+                                    # Invalid range spec, use default
+                                    format_values.append(rng.randint(0, 9))
+                            else:
+                                # No custom range specified, use default 0-9
+                                # This provides 10^(n-1) variations for n placeholders by default
+                                format_values.append(rng.randint(0, 9))
+                        formatted_value = format_str.format(*format_values)
+                    else:
+                        # No placeholders found, use format string as-is
+                        formatted_value = format_str
+                    
                     # Truncate to column max length
                     maxlen = int(col.char_max_length) if col.char_max_length else 255
                     return formatted_value[:maxlen]
@@ -489,9 +539,44 @@ def generate_unique_value_pool(col_meta, config, needed_count, rng):
         
         if min_val is not None and max_val is not None:
             range_size = int(max_val) - int(min_val) + 1
-            if range_size < needed_count:
-                print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
-                    col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
+            
+            # Check if format has multiple placeholders which increases capacity
+            format_str = config.get("format", "")
+            num_placeholders = count_format_placeholders(format_str) if format_str else 0
+            
+            # Calculate effective capacity with multiple placeholders
+            if num_placeholders > 1:
+                # Check if custom ranges are specified
+                format_ranges = config.get("format_ranges", None)
+                
+                # Calculate multiplier from additional placeholders
+                capacity_multiplier = 1
+                for i in range(1, num_placeholders):
+                    if format_ranges and isinstance(format_ranges, list) and len(format_ranges) > i:
+                        range_spec = format_ranges[i]
+                        if isinstance(range_spec, list) and len(range_spec) == 2:
+                            range_min, range_max = int(range_spec[0]), int(range_spec[1])
+                            placeholder_range_size = range_max - range_min + 1
+                            capacity_multiplier *= placeholder_range_size
+                        else:
+                            # Invalid range spec, use default 0-9 (10 values)
+                            capacity_multiplier *= 10
+                    else:
+                        # No custom range specified, use default 0-9 (10 values)
+                        capacity_multiplier *= 10
+                
+                effective_capacity = range_size * capacity_multiplier
+            else:
+                effective_capacity = range_size
+            
+            # Warn only if effective capacity is insufficient
+            if effective_capacity < needed_count:
+                if num_placeholders > 1:
+                    print("WARNING: Column {0} range [{1}, {2}] with {3} placeholders has capacity {4} but {5} rows requested".format(
+                        col_meta.name, min_val, max_val, num_placeholders, effective_capacity, needed_count), file=sys.stderr)
+                else:
+                    print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
+                        col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
             
             # For large ranges, sample instead of generating all
             if range_size > needed_count * 2 and range_size > 100000:
@@ -515,14 +600,80 @@ def generate_unique_value_pool(col_meta, config, needed_count, rng):
                 format_str = config["format"]
                 maxlen = int(col_meta.char_max_length) if col_meta.char_max_length else 255
                 
+                # Count placeholders to support multiple format arguments
+                num_placeholders = count_format_placeholders(format_str)
+                
                 formatted_values = []
-                for val in all_values:
-                    try:
-                        formatted = format_str.format(val)
-                        formatted_values.append(formatted[:maxlen])
-                    except (ValueError, KeyError, IndexError):
-                        # Fallback to plain value if format fails
-                        formatted_values.append(str(val))
+                if num_placeholders == 1:
+                    # Single placeholder: format each base value directly (backward compatible)
+                    for val in all_values:
+                        try:
+                            formatted = format_str.format(val)
+                            formatted_values.append(formatted[:maxlen])
+                        except (ValueError, KeyError, IndexError):
+                            # Fallback to plain value if format fails
+                            formatted_values.append(str(val))
+                elif num_placeholders > 1:
+                    # Multiple placeholders: generate combinations to ensure uniqueness
+                    # Strategy: generate all needed combinations across placeholders
+                    
+                    # Check if custom ranges are specified for placeholders
+                    format_ranges = config.get("format_ranges", None)
+                    
+                    # Calculate range sizes for additional placeholders
+                    additional_range_sizes = []
+                    for i in range(1, num_placeholders):
+                        if format_ranges and isinstance(format_ranges, list) and len(format_ranges) > i:
+                            range_spec = format_ranges[i]
+                            if isinstance(range_spec, list) and len(range_spec) == 2:
+                                range_min, range_max = int(range_spec[0]), int(range_spec[1])
+                                additional_range_sizes.append((range_min, range_max))
+                            else:
+                                # Invalid range spec, use default 0-9
+                                additional_range_sizes.append((0, 9))
+                        else:
+                            # No custom range specified, use default 0-9
+                            additional_range_sizes.append((0, 9))
+                    
+                    # Generate combinations up to needed_count
+                    combinations_generated = 0
+                    base_val_idx = 0
+                    
+                    while combinations_generated < needed_count and base_val_idx < len(all_values):
+                        val = all_values[base_val_idx]
+                        
+                        # For this base value, generate variations using additional placeholders
+                        # Calculate how many variations we can generate
+                        total_variations = 1
+                        for range_min, range_max in additional_range_sizes:
+                            total_variations *= (range_max - range_min + 1)
+                        
+                        # Generate variations for this base value
+                        for variation in range(min(total_variations, needed_count - combinations_generated)):
+                            try:
+                                # Create format values: first is val (from range), rest from variation counter
+                                format_values = [val]
+                                
+                                # Use the variation counter to generate values for additional placeholders
+                                temp_counter = variation
+                                for range_min, range_max in additional_range_sizes:
+                                    range_size = range_max - range_min + 1
+                                    # Use modulo to cycle through the range
+                                    format_values.append(range_min + (temp_counter % range_size))
+                                    temp_counter //= range_size
+                                
+                                formatted = format_str.format(*format_values)
+                                formatted_values.append(formatted[:maxlen])
+                                combinations_generated += 1
+                            except (ValueError, KeyError, IndexError):
+                                # Fallback to plain value if format fails
+                                formatted_values.append(str(val))
+                                combinations_generated += 1
+                        
+                        base_val_idx += 1
+                else:
+                    # No placeholders found, use format string as-is for each value
+                    formatted_values = [format_str[:maxlen]] * len(all_values)
                 
                 rng.shuffle(formatted_values)
                 return formatted_values
