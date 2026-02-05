@@ -139,7 +139,7 @@ def validate_populate_column_config(col_meta, config):
 
 def debug_print(*args, level=1, **kwargs):
     """
-    Print debug message if debug level is sufficient.
+    Print debug message with timestamp if debug level is sufficient.
     
     Args:
         *args: Message arguments to print
@@ -151,7 +151,9 @@ def debug_print(*args, level=1, **kwargs):
         GLOBALS["debug_level"] = 1
     
     if GLOBALS.get("debug_level", 0) >= level:
-        print("[DEBUG]", *args, **kwargs)
+        # Add timestamp with milliseconds
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        print("[DEBUG {0}]".format(timestamp), *args, **kwargs)
 
 def slugify(s):
     return re.sub(r"[^0-9a-zA-Z_]+", "_", s or "")
