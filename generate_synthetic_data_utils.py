@@ -316,13 +316,26 @@ def generate_value_with_config(rng, col, config=None):
                         # Single placeholder: use base_value directly (backward compatible)
                         formatted_value = format_str.format(base_value)
                     elif num_placeholders > 1:
-                        # Multiple placeholders: first uses base_value, rest use small random values
-                        # This helps avoid duplicates when the main range is limited
+                        # Multiple placeholders: first uses base_value, rest use custom or default ranges
                         format_values = [base_value]
+                        
+                        # Check if custom ranges are specified for placeholders
+                        format_ranges = config.get("format_ranges", None)
+                        
                         for i in range(1, num_placeholders):
-                            # Generate small variation values (0-9 for additional placeholders)
-                            # This provides 10^(n-1) variations for n placeholders
-                            format_values.append(rng.randint(0, 9))
+                            # Use custom range if provided, otherwise default to 0-9
+                            if format_ranges and isinstance(format_ranges, list) and len(format_ranges) > i:
+                                range_spec = format_ranges[i]
+                                if isinstance(range_spec, list) and len(range_spec) == 2:
+                                    range_min, range_max = range_spec
+                                    format_values.append(rng.randint(int(range_min), int(range_max)))
+                                else:
+                                    # Invalid range spec, use default
+                                    format_values.append(rng.randint(0, 9))
+                            else:
+                                # No custom range specified, use default 0-9
+                                # This provides 10^(n-1) variations for n placeholders by default
+                                format_values.append(rng.randint(0, 9))
                         formatted_value = format_str.format(*format_values)
                     else:
                         # No placeholders found, use format string as-is
@@ -533,8 +546,26 @@ def generate_unique_value_pool(col_meta, config, needed_count, rng):
             
             # Calculate effective capacity with multiple placeholders
             if num_placeholders > 1:
-                # Additional placeholders provide 10^(n-1) more variations
-                effective_capacity = range_size * (10 ** (num_placeholders - 1))
+                # Check if custom ranges are specified
+                format_ranges = config.get("format_ranges", None)
+                
+                # Calculate multiplier from additional placeholders
+                capacity_multiplier = 1
+                for i in range(1, num_placeholders):
+                    if format_ranges and isinstance(format_ranges, list) and len(format_ranges) > i:
+                        range_spec = format_ranges[i]
+                        if isinstance(range_spec, list) and len(range_spec) == 2:
+                            range_min, range_max = int(range_spec[0]), int(range_spec[1])
+                            placeholder_range_size = range_max - range_min + 1
+                            capacity_multiplier *= placeholder_range_size
+                        else:
+                            # Invalid range spec, use default 0-9 (10 values)
+                            capacity_multiplier *= 10
+                    else:
+                        # No custom range specified, use default 0-9 (10 values)
+                        capacity_multiplier *= 10
+                
+                effective_capacity = range_size * capacity_multiplier
             else:
                 effective_capacity = range_size
             
@@ -584,25 +615,62 @@ def generate_unique_value_pool(col_meta, config, needed_count, rng):
                             formatted_values.append(str(val))
                 elif num_placeholders > 1:
                     # Multiple placeholders: generate combinations to ensure uniqueness
-                    # Strategy: use base values for first placeholder, enumerate variations for others
-                    variation_counter = 0
-                    for val in all_values:
-                        try:
-                            # Create format values: first is val (from range), rest are variation counters
-                            format_values = [val]
-                            # Use the variation counter divided by powers to fill additional placeholders
-                            temp_counter = variation_counter
-                            for i in range(1, num_placeholders):
-                                # Use modulo 10 to keep values single-digit (0-9)
-                                format_values.append(temp_counter % 10)
-                                temp_counter //= 10
-                            
-                            formatted = format_str.format(*format_values)
-                            formatted_values.append(formatted[:maxlen])
-                            variation_counter += 1
-                        except (ValueError, KeyError, IndexError):
-                            # Fallback to plain value if format fails
-                            formatted_values.append(str(val))
+                    # Strategy: generate all needed combinations across placeholders
+                    
+                    # Check if custom ranges are specified for placeholders
+                    format_ranges = config.get("format_ranges", None)
+                    
+                    # Calculate range sizes for additional placeholders
+                    additional_range_sizes = []
+                    for i in range(1, num_placeholders):
+                        if format_ranges and isinstance(format_ranges, list) and len(format_ranges) > i:
+                            range_spec = format_ranges[i]
+                            if isinstance(range_spec, list) and len(range_spec) == 2:
+                                range_min, range_max = int(range_spec[0]), int(range_spec[1])
+                                additional_range_sizes.append((range_min, range_max))
+                            else:
+                                # Invalid range spec, use default 0-9
+                                additional_range_sizes.append((0, 9))
+                        else:
+                            # No custom range specified, use default 0-9
+                            additional_range_sizes.append((0, 9))
+                    
+                    # Generate combinations up to needed_count
+                    combinations_generated = 0
+                    base_val_idx = 0
+                    
+                    while combinations_generated < needed_count and base_val_idx < len(all_values):
+                        val = all_values[base_val_idx]
+                        
+                        # For this base value, generate variations using additional placeholders
+                        # Calculate how many variations we can generate
+                        total_variations = 1
+                        for range_min, range_max in additional_range_sizes:
+                            total_variations *= (range_max - range_min + 1)
+                        
+                        # Generate variations for this base value
+                        for variation in range(min(total_variations, needed_count - combinations_generated)):
+                            try:
+                                # Create format values: first is val (from range), rest from variation counter
+                                format_values = [val]
+                                
+                                # Use the variation counter to generate values for additional placeholders
+                                temp_counter = variation
+                                for range_min, range_max in additional_range_sizes:
+                                    range_size = range_max - range_min + 1
+                                    # Use modulo to cycle through the range
+                                    format_values.append(range_min + (temp_counter % range_size))
+                                    temp_counter //= range_size
+                                
+                                formatted = format_str.format(*format_values)
+                                formatted_values.append(formatted[:maxlen])
+                                combinations_generated += 1
+                            except (ValueError, KeyError, IndexError):
+                                # Fallback to plain value if format fails
+                                formatted_values.append(str(val))
+                                combinations_generated += 1
+                        
+                        base_val_idx += 1
                 else:
                     # No placeholders found, use format string as-is for each value
                     formatted_values = [format_str[:maxlen]] * len(all_values)

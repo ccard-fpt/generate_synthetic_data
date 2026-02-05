@@ -606,6 +606,74 @@ class TestGenerateValueWithConfig(unittest.TestCase):
         
         # Should get many unique values
         self.assertGreater(len(values), 40, "Should generate diverse unique values with three placeholders")
+    
+    def test_generate_varchar_with_custom_format_ranges(self):
+        """Test custom format_ranges for each placeholder"""
+        col = self._make_column("code", "varchar")
+        config = {
+            "column": "code",
+            "min": 100,
+            "max": 200,
+            "format": "CODE_{:d}_{:d}",
+            "format_ranges": [[100, 200], [50, 99]]
+        }
+        
+        # Generate multiple values
+        values = set()
+        first_values = set()
+        second_values = set()
+        
+        for _ in range(100):
+            value = generate_value_with_config(self.rng, col, config)
+            self.assertIsInstance(value, str)
+            self.assertTrue(value.startswith("CODE_"))
+            
+            # Extract the two numeric parts
+            parts = value.split("_")
+            self.assertEqual(len(parts), 3)
+            
+            # First placeholder should be in custom range [100, 200]
+            first_num = int(parts[1])
+            self.assertGreaterEqual(first_num, 100)
+            self.assertLessEqual(first_num, 200)
+            first_values.add(first_num)
+            
+            # Second placeholder should be in custom range [50, 99]
+            second_num = int(parts[2])
+            self.assertGreaterEqual(second_num, 50)
+            self.assertLessEqual(second_num, 99)
+            second_values.add(second_num)
+            
+            values.add(value)
+        
+        # Should get many unique values with custom ranges
+        self.assertGreater(len(values), 50, "Should generate diverse unique values with custom ranges")
+        # Verify custom ranges are being used
+        self.assertTrue(any(v >= 100 for v in first_values), "First placeholder should use custom range")
+        self.assertTrue(any(v >= 50 for v in second_values), "Second placeholder should use custom range")
+    
+    def test_generate_varchar_with_partial_format_ranges(self):
+        """Test with format_ranges specified only for first placeholder"""
+        col = self._make_column("code", "varchar")
+        config = {
+            "column": "code",
+            "min": 10,
+            "max": 20,
+            "format": "CODE_{:d}_{:d}",
+            "format_ranges": [[10, 20]]  # Only first placeholder specified
+        }
+        
+        # Generate values
+        second_values = set()
+        for _ in range(30):
+            value = generate_value_with_config(self.rng, col, config)
+            parts = value.split("_")
+            if len(parts) >= 3:
+                second_values.add(int(parts[2]))
+        
+        # Second placeholder should use default 0-9 range
+        self.assertTrue(all(0 <= v <= 9 for v in second_values), 
+                       "Second placeholder should use default 0-9 range when not in format_ranges")
 
 
 class TestBackwardCompatibility(unittest.TestCase):
