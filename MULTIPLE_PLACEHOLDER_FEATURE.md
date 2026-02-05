@@ -116,9 +116,74 @@ All standard Python format specifiers are supported:
 - `{:02x}` - Hexadecimal lowercase (2 digits)
 - `{:04X}` - Hexadecimal uppercase (4 digits)
 
-### Additional Placeholder Values
+### Custom Ranges for Placeholders
 
-- **Range**: 0-9
+You can now specify custom ranges for each placeholder using the `format_ranges` parameter:
+
+```json
+{
+  "column": "code",
+  "min": 100,
+  "max": 200,
+  "format": "CODE_{:d}_{:d}",
+  "format_ranges": [[100, 200], [50, 99]]
+}
+```
+
+This generates values like:
+- `CODE_150_75`
+- `CODE_125_82`
+- `CODE_189_67`
+
+**How it works:**
+- First element in `format_ranges` corresponds to first placeholder (uses `min`/`max` if omitted)
+- Additional elements specify ranges for additional placeholders
+- If `format_ranges` is not specified, additional placeholders default to [0, 9]
+
+#### Example: Wide Range for Additional Placeholder
+
+```json
+{
+  "column": "transaction_id",
+  "min": 1000,
+  "max": 2000,
+  "format": "TXN_{:d}_{:d}",
+  "format_ranges": [[1000, 2000], [0, 999]]
+}
+```
+
+Generates:
+- `TXN_1523_456`
+- `TXN_1847_123`
+- `TXN_1256_789`
+
+**Capacity**: 1,001 base values × 1,000 variations = **1,001,000 unique values**
+
+#### Example: Multiple Custom Ranges
+
+```json
+{
+  "column": "part_number",
+  "min": 100,
+  "max": 999,
+  "format": "PART_{:d}_{:d}_{:d}",
+  "format_ranges": [[100, 999], [1, 50], [1, 10]]
+}
+```
+
+Generates:
+- `PART_523_25_7`
+- `PART_847_12_3`
+- `PART_256_48_9`
+
+**Capacity**: 900 × 50 × 10 = **450,000 unique values**
+
+### Default Placeholder Behavior
+
+When `format_ranges` is not specified:
+
+- **First placeholder**: Uses `min`/`max` range from configuration
+- **Additional placeholders**: Default to [0, 9] range
 - **Distribution**: Randomly selected (for individual values) or sequentially enumerated (for unique pools)
 
 ## Backward Compatibility
@@ -226,26 +291,55 @@ The generator will:
    "min": 1, "max": 1000, "format": "CODE_{:04d}_{:02d}_{:01d}"
    ```
 
-### Placeholder Width
+### Placeholder Width and Padding
 
-Match placeholder widths to your expected values:
+Python format specifiers control padding:
 
 ```json
-// For values 0-999, use {:03d} (3 digits)
-"format": "PREFIX_{:03d}_SUFFIX"
+// {:d} - No padding (variable width)
+"format": "CODE_{:d}_{:d}"
+// Generates: CODE_5_123, CODE_42_7, CODE_999_1
 
-// For values 0-9, use {:01d} (1 digit)
-"format": "PREFIX_{:01d}_SUFFIX"
+// {:03d} - Zero-padded to 3 digits (fixed width)
+"format": "CODE_{:03d}_{:03d}"
+// Generates: CODE_005_123, CODE_042_007, CODE_999_001
 
-// For values 0-99, use {:02d} (2 digits)
-"format": "PREFIX_{:02d}_SUFFIX"
+// {:5d} - Space-padded to 5 digits (usually avoid)
+"format": "CODE_{:5d}_{:5d}"
+// Generates: CODE_    5_  123, CODE_   42_    7
 ```
+
+**Recommendation**: Use `{:d}` for no padding or `{:0Nd}` for zero-padding to N digits.
+
+### Custom Ranges for Placeholders
+
+When you need specific ranges for each placeholder:
+
+```json
+{
+  "column": "code",
+  "min": 100,
+  "max": 200,
+  "format": "CODE_{:d}_{:d}",
+  "format_ranges": [[100, 200], [50, 99]]
+}
+```
+
+- First placeholder: 100-200
+- Second placeholder: 50-99
+- Generates: `CODE_150_75`, `CODE_125_82`
+
+**Without `format_ranges`:**
+- First placeholder: uses min/max (100-200)
+- Additional placeholders: default to 0-9
+- Generates: `CODE_150_5`, `CODE_125_2`
 
 ### Performance Considerations
 
 - Multiple placeholders add minimal overhead
 - Unique pool generation is efficient even with millions of values
 - Random variation ensures good distribution
+- Custom ranges are fully supported in both individual and pool generation
 
 ## Troubleshooting
 
