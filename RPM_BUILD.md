@@ -11,11 +11,13 @@ This directory contains the RPM spec file and build tools for creating an RPM pa
 sudo dnf install -y rpm-build rpmdevtools
 
 # Install build dependencies
-sudo dnf install -y python3-devel
+sudo dnf install -y python3-devel python3-PyMySQL
 
 # Install runtime dependencies (optional, for testing)
 sudo dnf install -y python3 python3-PyMySQL
 ```
+
+Note: `python3-PyMySQL` is required as a build dependency because the RPM build process runs unit tests in the `%check` section.
 
 ## Quick Start
 
@@ -118,6 +120,25 @@ After installation, the package provides:
 - `/usr/share/doc/generate-synthetic-data/CARTESIAN_UNIQUE_FK_FEATURE.md` - Cartesian features
 - `/usr/share/doc/generate-synthetic-data/MULTI_CONSTRAINT_CARTESIAN_FEATURE.md` - Multi-constraint features
 - `/usr/share/doc/generate-synthetic-data/REFACTORING.md` - Refactoring notes
+
+## Build-time Testing
+
+The RPM spec file includes a `%check` section that runs all unit tests during the build process. This ensures:
+
+- All 20 unit test suites are executed
+- Tests must pass for the RPM build to succeed
+- Any test failures will prevent package creation
+- Build log contains full test output for debugging
+
+The tests validate:
+- Constraint resolution logic
+- Value generation algorithms
+- FK relationship handling
+- UNIQUE constraint satisfaction
+- Data type conversions
+- Configuration parsing
+
+This provides quality assurance and prevents regression issues in the packaged software.
 
 ## Verifying the Installation
 

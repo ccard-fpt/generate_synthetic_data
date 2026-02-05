@@ -9,6 +9,7 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
 BuildRequires:  python3-devel
+BuildRequires:  python3-PyMySQL
 Requires:       python3 >= 3.6
 Requires:       python3-PyMySQL
 
@@ -62,6 +63,18 @@ install -m 644 CARTESIAN_UNIQUE_FK_FEATURE.md %{buildroot}%{_docdir}/%{name}/
 install -m 644 MULTI_CONSTRAINT_CARTESIAN_FEATURE.md %{buildroot}%{_docdir}/%{name}/
 install -m 644 REFACTORING.md %{buildroot}%{_docdir}/%{name}/
 
+%check
+# Run unit tests
+export PYTHONPATH=%{_builddir}/%{name}-%{version}:$PYTHONPATH
+echo "Running unit tests..."
+for test_file in %{_builddir}/%{name}-%{version}/test_*.py; do
+    if [ -f "$test_file" ]; then
+        echo "Running $(basename $test_file)..."
+        %{__python3} "$test_file" || exit 1
+    fi
+done
+echo "All tests passed successfully!"
+
 %files
 %{_bindir}/generate-synthetic-data
 %{_datadir}/%{name}/
@@ -73,4 +86,5 @@ install -m 644 REFACTORING.md %{buildroot}%{_docdir}/%{name}/
 - Support for Oracle Linux 8 and above
 - Includes granular debug logging with timestamps
 - Performance optimizations (regex pre-compilation, lock contention reduction)
+- Added %check section to run unit tests during RPM build
 
