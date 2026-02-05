@@ -526,9 +526,26 @@ def generate_unique_value_pool(col_meta, config, needed_count, rng):
         
         if min_val is not None and max_val is not None:
             range_size = int(max_val) - int(min_val) + 1
-            if range_size < needed_count:
-                print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
-                    col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
+            
+            # Check if format has multiple placeholders which increases capacity
+            format_str = config.get("format", "")
+            num_placeholders = count_format_placeholders(format_str) if format_str else 0
+            
+            # Calculate effective capacity with multiple placeholders
+            if num_placeholders > 1:
+                # Additional placeholders provide 10^(n-1) more variations
+                effective_capacity = range_size * (10 ** (num_placeholders - 1))
+            else:
+                effective_capacity = range_size
+            
+            # Warn only if effective capacity is insufficient
+            if effective_capacity < needed_count:
+                if num_placeholders > 1:
+                    print("WARNING: Column {0} range [{1}, {2}] with {3} placeholders has capacity {4} but {5} rows requested".format(
+                        col_meta.name, min_val, max_val, num_placeholders, effective_capacity, needed_count), file=sys.stderr)
+                else:
+                    print("WARNING: Column {0} range [{1}, {2}] has only {3} values but {4} rows requested".format(
+                        col_meta.name, min_val, max_val, range_size, needed_count), file=sys.stderr)
             
             # For large ranges, sample instead of generating all
             if range_size > needed_count * 2 and range_size > 100000:
